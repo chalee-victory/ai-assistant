@@ -1,0 +1,35 @@
+# 환경변수 (절대 커밋 금지)
+.env
+.env.local
+
+# Firebase 서비스 계정 키 (프로젝트 밖 C:\keys 에 보관)
+*serviceAccount*.json
+*firebase-adminsdk*.json
+
+# Python 가상환경
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# 빌드 산출물
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 프론트엔드 빌드 시 생성 (커밋 금지)
+frontend/config.js
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
