@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import ALLOWED_ORIGINS
-from routers import conversations, data
+from routers import chat, conversations, data
 
 app = FastAPI(
     title="아파트 시세 AI 비서",
@@ -26,3 +26,4 @@ app.add_middleware(
 # 라우터 등록
 app.include_router(data.router)
 app.include_router(conversations.router)
+app.include_router(chat.router)

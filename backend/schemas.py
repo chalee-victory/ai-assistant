@@ -101,3 +101,17 @@ class ConversationDetail(BaseModel):
     messages: list[Message]
     created_at: str
     updated_at: str
+
+
+# ════════════════════════════════════════════════════════════
+# 채팅 모델
+# ════════════════════════════════════════════════════════════
+
+class ChatRequest(BaseModel):
+    message: Annotated[str, Field(min_length=1, max_length=1000, description="질문 (1~1000자)")]
+    conversation_id: Optional[str] = None  # 없으면 새 대화 자동 생성
+
+
+class ChatResponse(BaseModel):
+    conversation_id: str
+    answer: str
