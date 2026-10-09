@@ -27,9 +27,9 @@ def list_conversations() -> list[ConversationSummary]:
 
 @router.get("/{conv_id}", response_model=ConversationDetail, summary="대화 상세 조회")
 def get_conversation(conv_id: str) -> ConversationDetail:
-    return conversation_service.get_conversation(conv_id)
+    return conversation_service.get_conversation(conv_id.strip())
 
 
 @router.delete("/{conv_id}", status_code=204, summary="대화 삭제")
 def delete_conversation(conv_id: str) -> None:
-    conversation_service.delete_conversation(conv_id)
+    conversation_service.delete_conversation(conv_id.strip())
