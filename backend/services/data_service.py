@@ -1,8 +1,8 @@
 """
 data_service.py — data 컬렉션 CRUD
 
-생성·수정·삭제 후에는 summary_service.compute_and_save_summary()를
-호출해 meta/summary 캐시를 항상 최신 상태로 유지한다.
+생성·수정·삭제 후에는 summary_service.compute_and_save_region()을
+호출해 변경된 지역 요약만 갱신한다 (Firestore 읽기 절약).
 
 문서 ID 규칙: {date}_{region}  예) 2026-09-28_세종
 """
@@ -13,7 +13,7 @@ from fastapi import HTTPException
 
 from firebase import db
 from schemas import DataCreate, DataListResponse, DataResponse, DataUpdate
-from services.summary_service import compute_and_save_summary
+from services.summary_service import compute_and_save_region
 
 COLLECTION = "data"
 
@@ -45,7 +45,7 @@ def create_data(payload: DataCreate) -> DataResponse:
         "created_at": datetime.now(timezone.utc),
     }
     doc_ref.set(doc_data)
-    compute_and_save_summary()
+    compute_and_save_region(payload.region)
 
     return _to_response(doc_id, doc_data)
 
@@ -98,11 +98,12 @@ def update_data(doc_id: str, payload: DataUpdate) -> DataResponse:
         raise HTTPException(status_code=404, detail=f"문서를 찾을 수 없습니다: {doc_id}")
 
     current = existing.to_dict()
+    old_region = current["region"]
     updated_fields = payload.model_dump(exclude_none=True)
 
     # 변경 후 date/region으로 새 문서 ID 계산
     new_date = updated_fields.get("date", current["date"])
-    new_region = updated_fields.get("region", current["region"])
+    new_region = updated_fields.get("region", old_region)
     new_doc_id = f"{new_date}_{new_region}"
 
     new_data = {**current, **updated_fields, "updated_at": datetime.now(timezone.utc)}
@@ -116,16 +117,24 @@ def update_data(doc_id: str, payload: DataUpdate) -> DataResponse:
     else:
         doc_ref.update({**updated_fields, "updated_at": datetime.now(timezone.utc)})
 
-    compute_and_save_summary()
+    # region이 바뀌었으면 이전 지역과 새 지역 모두 갱신
+    affected = {new_region}
+    if new_region != old_region:
+        affected.add(old_region)
+    for r in sorted(affected):
+        compute_and_save_region(r)
+
     return _to_response(new_doc_id, new_data)
 
 
 # ── 삭제 ──────────────────────────────────────────────────
 def delete_data(doc_id: str) -> None:
     doc_ref = db.collection(COLLECTION).document(doc_id)
+    snapshot = doc_ref.get()
 
-    if not doc_ref.get().exists:
+    if not snapshot.exists:
         raise HTTPException(status_code=404, detail=f"문서를 찾을 수 없습니다: {doc_id}")
 
+    region = snapshot.to_dict()["region"]
     doc_ref.delete()
-    compute_and_save_summary()
+    compute_and_save_region(region)

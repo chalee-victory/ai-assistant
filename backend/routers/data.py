@@ -41,10 +41,10 @@ def create_data(payload: DataCreate) -> DataResponse:
 # ── 수정 ──────────────────────────────────────────────────
 @router.put("/{doc_id}", response_model=DataResponse, summary="데이터 수정")
 def update_data(doc_id: str, payload: DataUpdate) -> DataResponse:
-    return data_service.update_data(doc_id, payload)
+    return data_service.update_data(doc_id.strip(), payload)
 
 
 # ── 삭제 ──────────────────────────────────────────────────
 @router.delete("/{doc_id}", status_code=204, summary="데이터 삭제")
 def delete_data(doc_id: str) -> None:
-    data_service.delete_data(doc_id)
+    data_service.delete_data(doc_id.strip())
