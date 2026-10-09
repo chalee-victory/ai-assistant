@@ -64,3 +64,40 @@ class DataListResponse(BaseModel):
     page: int
     page_size: int
     items: list[DataResponse]
+
+
+# ════════════════════════════════════════════════════════════
+# 대화(Conversation) 모델
+# ════════════════════════════════════════════════════════════
+
+RoleType = Literal["user", "assistant"]
+
+
+# ── 메시지 단위 ────────────────────────────────────────────
+class Message(BaseModel):
+    role: RoleType
+    content: str
+    created_at: str  # ISO 8601 문자열로 직렬화
+
+
+# ── 대화 생성 요청 ─────────────────────────────────────────
+class ConversationCreate(BaseModel):
+    title: str = "새 대화"
+
+
+# ── 목록 응답 (messages 본문 제외) ──────────────────────────
+class ConversationSummary(BaseModel):
+    id: str
+    title: str
+    message_count: int
+    created_at: str
+    updated_at: str
+
+
+# ── 상세 응답 (messages 전체 포함) ──────────────────────────
+class ConversationDetail(BaseModel):
+    id: str
+    title: str
+    messages: list[Message]
+    created_at: str
+    updated_at: str
