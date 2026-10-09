@@ -5,9 +5,12 @@ compute_and_save_summary(): data 전체를 읽어 모든 지역 요약을 재계
 compute_and_save_region():  특정 지역 데이터만 읽어 그 지역 요약만 갱신한다. (CRUD용)
 get_summary():              저장된 meta/summary 문서를 그대로 반환한다.
 
-추세 판정 규칙:
-  - direction  : change_4w_pct 부호 기준. |값| < 0.05% → 보합
-  - consecutive_weeks: 직전 주간 변화 부호 연속 카운트 (기존 방식 유지)
+추세 필드 구조:
+  - trend  : { direction, change_4w_pct }  — 4주 변화율 기준 큰 흐름
+             direction: change_4w_pct 부호 기준. |값| < 0.05% → 보합
+  - streak : { direction, weeks }          — 직전 주 변화 기준 단기 흐름
+             direction: 직전 주 증감 부호 기준. 0이면 보합
+             weeks: 그 방향으로 연속된 주 수
 
 변화율 기준:
   - change_4w_pct  : 최신 날짜 − 28일 이하인 가장 가까운 날짜의 값과 비교
@@ -69,25 +72,34 @@ def _compute_region_stats(records: list[dict]) -> dict:
     val_52w = _find_value_before(dates, values, 364)
     change_52w_pct = _pct(latest_val, val_52w) if val_52w is not None else _pct(latest_val, first_val)
 
-    # ── 추세 방향: change_4w_pct 부호 기준 ───────────────────────
+    # ── trend: 4주 변화율 기준 큰 흐름 ──────────────────────────
     if abs(change_4w_pct) < TREND_FLAT_THRESHOLD:
-        direction = "보합"
+        trend_direction = "보합"
     elif change_4w_pct > 0:
-        direction = "상승"
+        trend_direction = "상승"
     else:
-        direction = "하락"
+        trend_direction = "하락"
 
-    # ── 연속 상승·하락 주 수: 주간 증감 부호 기준 (기존 방식) ─────
-    consecutive_weeks = 0
+    # ── streak: 직전 주 변화 기준 단기 흐름 ──────────────────────
+    streak_direction = "보합"
+    streak_weeks = 0
     if n >= 2:
         changes = [values[i] - values[i - 1] for i in range(1, n)]
-        recent_dir = "상승" if changes[-1] > 0 else ("하락" if changes[-1] < 0 else "보합")
-        if recent_dir != "보합":
-            for c in reversed(changes):
-                if (recent_dir == "상승" and c > 0) or (recent_dir == "하락" and c < 0):
-                    consecutive_weeks += 1
-                else:
-                    break
+        last_change = changes[-1]
+        if last_change > 0:
+            streak_direction = "상승"
+        elif last_change < 0:
+            streak_direction = "하락"
+        # 연속 주 수: streak_direction 과 같은 방향이 연속된 주 수
+        for c in reversed(changes):
+            if streak_direction == "상승" and c > 0:
+                streak_weeks += 1
+            elif streak_direction == "하락" and c < 0:
+                streak_weeks += 1
+            elif streak_direction == "보합" and c == 0:
+                streak_weeks += 1
+            else:
+                break
 
     return {
         "period": {"start": dates[0], "end": dates[-1]},
@@ -101,8 +113,12 @@ def _compute_region_stats(records: list[dict]) -> dict:
         "change_52w_pct": change_52w_pct,
         "change_total_pct": _pct(latest_val, first_val),
         "trend": {
-            "direction": direction,
-            "consecutive_weeks": consecutive_weeks,
+            "direction": trend_direction,
+            "change_4w_pct": change_4w_pct,
+        },
+        "streak": {
+            "direction": streak_direction,
+            "weeks": streak_weeks,
         },
     }
 

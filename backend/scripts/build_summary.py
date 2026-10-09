@@ -24,7 +24,9 @@ if __name__ == "__main__":
     print(f"[확인] 총 건수: {summary.get('total_count')}")
     for region, stats in summary.get("by_region", {}).items():
         trend = stats.get("trend", {})
+        streak = stats.get("streak", {})
         print(
             f"  {region}: 최신 {stats['latest']['value']} ({stats['latest']['date']}) | "
-            f"추세 {trend.get('direction')} {trend.get('consecutive_weeks')}주"
+            f"추세 {trend.get('direction')}(4주 {trend.get('change_4w_pct'):+.2f}%) | "
+            f"최근 {streak.get('direction')} {streak.get('weeks')}주"
         )
