@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>아파트 시세 AI 비서</title>
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css"
+    crossorigin="anonymous"
+  />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- ── 왼쪽: 대화 사이드바 ── -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <span class="app-icon">🏠</span>
+        <h1 class="app-title">아파트 시세 AI</h1>
+      </div>
+      <button id="btn-new-chat" class="btn-new-chat">+ 새 대화</button>
+      <div id="conv-list" class="conv-list">
+        <!-- 대화 목록 동적 생성 -->
+      </div>
+    </aside>
+
+    <!-- ── 가운데: 채팅 ── -->
+    <main id="chat-area">
+      <header class="chat-header">
+        <span id="chat-title">새 대화</span>
+      </header>
+      <div id="messages" class="messages">
+        <div class="welcome">
+          <div class="welcome-icon">🏠</div>
+          <h2>아파트 시세 AI 비서</h2>
+          <p>한국부동산원 주간 아파트 매매가격지수에 대해 질문하세요.</p>
+          <div class="welcome-examples">
+            <span class="example-chip" data-q="서울 강남 최근 추세가 어떤가요?">서울 강남 최근 추세</span>
+            <span class="example-chip" data-q="전국 고점 대비 현재 수준은?">전국 고점 대비 현재 수준</span>
+            <span class="example-chip" data-q="세종 지수 전체 변화를 알려주세요">세종 지수 전체 변화</span>
+            <span class="example-chip" data-q="5개 지역 중 최근 4주 동안 가장 많이 오른 곳은?">최근 4주 가장 많이 오른 지역</span>
+          </div>
+        </div>
+      </div>
+      <div id="cold-start-warn" class="cold-start-warn hidden">
+        ⏳ 서버를 깨우는 중입니다. 처음 요청은 최대 1분 소요될 수 있습니다.
+      </div>
+      <form id="chat-form" class="chat-input-wrap">
+        <textarea
+          id="chat-input"
+          class="chat-input"
+          placeholder="질문을 입력하세요 (Enter: 전송 / Shift+Enter: 줄바꿈)"
+          rows="1"
+        ></textarea>
+        <button id="btn-send" type="submit" class="btn-send" disabled>전송</button>
+      </form>
+    </main>
+
+    <!-- ── 오른쪽: 패널 ── -->
+    <aside id="right-panel">
+      <div class="panel-tabs">
+        <button class="tab-btn active" data-tab="summary">데이터 요약</button>
+        <button class="tab-btn" data-tab="data-mgmt">데이터 관리</button>
+      </div>
+
+      <!-- 탭 1: 데이터 요약 -->
+      <div id="tab-summary" class="tab-pane">
+        <div id="summary-cards">
+          <p class="loading-text">불러오는 중...</p>
+        </div>
+        <button id="btn-refresh-summary" class="btn-refresh">↻ 새로고침</button>
+      </div>
+
+      <!-- 탭 2: 데이터 관리 -->
+      <div id="tab-data-mgmt" class="tab-pane hidden">
+
+        <!-- 필터 -->
+        <div class="filter-bar">
+          <select id="filter-region" class="filter-select">
+            <option value="">전체 지역</option>
+            <option value="전국">전국</option>
+            <option value="서울-강북">서울-강북</option>
+            <option value="서울-강남">서울-강남</option>
+            <option value="대전">대전</option>
+            <option value="세종">세종</option>
+          </select>
+          <input type="date" id="filter-start" class="filter-date" title="시작일" />
+          <input type="date" id="filter-end" class="filter-date" title="종료일" />
+          <button id="btn-filter" class="btn-secondary full-col">조회</button>
+        </div>
+
+        <!-- 새 데이터 추가 (접기/펼치기) -->
+        <details id="add-details" class="add-section">
+          <summary class="add-summary">+ 새 데이터 추가</summary>
+          <form id="add-form" class="data-form">
+            <div class="form-row">
+              <label>날짜<input type="date" name="date" required /></label>
+              <label>지역
+                <select name="region" required>
+                  <option value="전국">전국</option>
+                  <option value="서울-강북">서울-강북</option>
+                  <option value="서울-강남">서울-강남</option>
+                  <option value="대전">대전</option>
+                  <option value="세종">세종</option>
+                </select>
+              </label>
+            </div>
+            <div class="form-row">
+              <label>지수값<input type="number" name="value" step="0.01" min="0.01" required /></label>
+              <label>메모<input type="text" name="memo" placeholder="선택 사항" /></label>
+            </div>
+            <div class="form-actions-inline">
+              <button type="submit" class="btn-primary">추가</button>
+              <span id="add-msg" class="form-msg"></span>
+            </div>
+          </form>
+        </details>
+
+        <!-- 데이터 테이블 -->
+        <div class="data-table-wrap">
+          <table id="data-table" class="data-table">
+            <thead>
+              <tr>
+                <th>날짜</th>
+                <th>지역</th>
+                <th>지수</th>
+                <th>메모</th>
+                <th>관리</th>
+              </tr>
+            </thead>
+            <tbody id="data-tbody">
+              <tr>
+                <td colspan="5" class="empty-cell">
+                  조회 버튼을 눌러 데이터를 불러오세요.
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div id="data-pagination" class="pagination"></div>
+
+      </div><!-- /tab-data-mgmt -->
+    </aside>
+
+  </div><!-- /app-layout -->
+
+  <!-- 수정 모달 -->
+  <div id="edit-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-label="데이터 수정">
+    <div class="modal-box">
+      <h3 class="modal-title">데이터 수정</h3>
+      <form id="edit-form" class="data-form">
+        <input type="hidden" name="id" />
+        <div class="form-row">
+          <label>날짜<input type="date" name="date" required /></label>
+          <label>지역
+            <select name="region" required>
+              <option value="전국">전국</option>
+              <option value="서울-강북">서울-강북</option>
+              <option value="서울-강남">서울-강남</option>
+              <option value="대전">대전</option>
+              <option value="세종">세종</option>
+            </select>
+          </label>
+        </div>
+        <div class="form-row">
+          <label>지수값<input type="number" name="value" step="0.01" min="0.01" required /></label>
+          <label>메모<input type="text" name="memo" /></label>
+        </div>
+        <div class="modal-actions">
+          <button type="submit" class="btn-primary">저장</button>
+          <button type="button" id="btn-cancel-edit" class="btn-secondary">취소</button>
+          <span id="edit-msg" class="form-msg"></span>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!--
+    config.js: .gitignore에 있으므로 커밋 금지.
+    로컬 개발: config.example.js를 복사해 config.js로 사용.
+    Vercel 배포: build.sh가 자동 생성.
+  -->
+  <script>window.API_BASE_URL = window.API_BASE_URL || 'http://localhost:8000';</script>
+  <script src="config.js" onerror="console.warn('[config.js 없음] 기본값 http://localhost:8000 사용')"></script>
+  <script src="app.js"></script>
+</body>
+</html>

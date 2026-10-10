@@ -78,7 +78,7 @@ def _build_system_prompt(summary: dict) -> str:
             (
                 f"- 4주 변화: {stats.get('change_4w_pct'):+.2f}% | "
                 f"52주 변화: {stats.get('change_52w_pct'):+.2f}% | "
-                f"전체 변화: {stats.get('change_total_pct'):+.2f}%"
+                f"전체 변화({period.get('start', '')} 이후): {stats.get('change_total_pct'):+.2f}%"
             ),
             f"- 추세(4주 기준): {trend.get('direction')} | 최근 흐름(직전 주 기준): {streak.get('direction')} {streak.get('weeks')}주 연속",
             "",
@@ -91,6 +91,9 @@ def _build_system_prompt(summary: dict) -> str:
         "  형식 예) ○○은 YYYY-MM-DD 고점(X) 대비 현재(Y, YYYY-MM-DD) 약 Z% 낮은 수준입니다.",
         "- 하락폭 표현 시 부호와 방향 동사를 함께 쓰지 않습니다.",
         "  올바른 예: '28.03% 하락' 또는 '-28.03%' / 틀린 예: '-28.03% 떨어졌다'",
+        "- '전체 변화'를 말할 때는 기간을 반드시 함께 표기합니다. 예: '2012-11-26 이후 +63.27%'",
+        "- '추세'는 4주 기준입니다. 전체 변화율과 혼합해 쓰지 않습니다.",
+        "  금지 예: '전체 +22.13%로 상승 추세' — 추세(4주 기준)와 전체 변화율은 별개 항목으로 서술하세요.",
         "",
         "## 지수 해석 규칙 (반드시 준수)",
         f"- 기준시점: {base_date} = 100 (5개 지역 공통)",
