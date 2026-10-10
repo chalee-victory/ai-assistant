@@ -99,3 +99,29 @@ ai-assistant/
   6. 프론트: index.html → style.css → app.js
   7. 배포: Render → Vercel(build.sh) → README.md
 - 보너스(필수 완료 후): Function Calling(지역·기간별 조회 도구), 그래프, CSV 내보내기, 다크모드
+
+## 진행 현황 (2026-10-10 기준)
+
+### 완료: 1~5단계
+- **1단계**: .gitignore, requirements.txt, .env.example, config.py
+- **2단계**: firebase.py, scripts/seed_data.py — Firestore data 컬렉션 3,600건 적재 완료
+- **3단계**: schemas.py, data_service.py, summary_service.py, routers/data.py, main.py
+  - 보완: trend(4주 기준)/streak(직전 주 기준) 분리
+  - 보완: 4주·52주 변화율을 행 인덱스 → 날짜 기준(28/364일)으로 수정 (연휴 공백 주 무관)
+  - 보완: CRUD 시 전체 3,600건 대신 해당 지역 ~720건만 재계산
+  - 보완: doc_id 앞뒤 공백 자동 제거 (PUT, DELETE)
+- **4단계**: conversation_service.py, routers/conversations.py — 대화 CRUD + add_message()
+- **5단계**: chat_service.py, routers/chat.py — GPT 채팅 API
+  - 의존성 고정: openai==1.57.0 + httpx==0.27.2 (proxies 호환 오류 해결)
+  - 시스템 프롬프트: 지역 순서 고정(전국→강북→강남→대전→세종), 갱신 시각 KST 표시
+  - 시스템 프롬프트: 답변 예시는 형식 틀만 사용(실제 숫자 금지), 답불가 질문은 이유+대안 제시
+  - scripts/show_prompt.py — OpenAI 호출 없이 프롬프트 전문 확인 가능
+  - 채팅 테스트 ①~⑤ 및 재테스트 모두 통과
+
+### 다음: 6단계 — 프론트엔드 (바닐라 HTML/CSS/JS)
+- frontend/index.html → style.css → app.js
+- Render 백엔드 URL을 API_BASE_URL 환경변수로 연결
+
+### 남은 작은 보완 (6단계 이후 또는 중 처리)
+- '전체 변화'는 기간(2012-11-26 이후)을 함께 표기
+- 시스템 프롬프트에서 '추세(4주)'와 전체 변화율을 섞어 쓰지 않도록 GPT 지침 보강
