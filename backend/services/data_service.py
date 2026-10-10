@@ -35,7 +35,13 @@ def create_data(payload: DataCreate) -> DataResponse:
     doc_ref = db.collection(COLLECTION).document(doc_id)
 
     if doc_ref.get().exists:
-        raise HTTPException(status_code=409, detail=f"이미 존재하는 데이터입니다: {doc_id}")
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{payload.date} {payload.region} 데이터가 이미 있습니다. "
+                "값을 바꾸려면 목록에서 [수정]을 눌러주세요."
+            ),
+        )
 
     doc_data = {
         "date": payload.date,

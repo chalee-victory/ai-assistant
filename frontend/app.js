@@ -23,7 +23,11 @@ async function apiFetch(method, path, body) {
   const res = await fetch(BASE + path, opts);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    // 422 Pydantic 오류: detail이 배열일 수 있음
+    const detail = Array.isArray(err.detail)
+      ? err.detail.map(e => e.msg || JSON.stringify(e)).join(' / ')
+      : (err.detail || `HTTP ${res.status}`);
+    throw new Error(detail);
   }
   // 204 No Content 또는 응답 본문이 없는 경우 json() 호출 금지
   if (res.status === 204) return null;
@@ -51,6 +55,17 @@ function esc(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+/** 데이터 추가/수정 폼 입력 검사. 오류 문자열 또는 null 반환. */
+function validateDataForm(fd) {
+  const date = fd.get('date');
+  const val  = fd.get('value');
+  if (!date || !date.trim()) return '날짜를 입력해주세요.';
+  const num = parseFloat(val);
+  if (!val || !val.trim()) return '지수값을 입력해주세요.';
+  if (isNaN(num) || num <= 0) return '지수값은 0보다 큰 숫자로 입력해주세요.';
+  return null;
 }
 
 /** 숫자 → "+1.23%" 형식 */
@@ -436,6 +451,12 @@ function initDataMgmt() {
     e.preventDefault();
     const fd  = new FormData(e.target);
     const msg = document.getElementById('add-msg');
+    const validErr = validateDataForm(fd);
+    if (validErr) {
+      msg.textContent = validErr;
+      msg.className = 'form-msg';
+      return;
+    }
     try {
       await api.post('/api/data', {
         date:   fd.get('date'),
@@ -445,13 +466,14 @@ function initDataMgmt() {
       });
       msg.textContent = '추가되었습니다.';
       msg.className = 'form-msg ok';
-      e.target.reset();
+      e.target.reset();                          // 성공 시에만 폼 초기화
       setTimeout(() => { msg.textContent = ''; }, 3000);
       loadData();
       loadSummary();
     } catch (err) {
       msg.textContent = `오류: ${err.message}`;
       msg.className = 'form-msg';
+      // 오류 시 입력값 유지 (reset 없음)
     }
   });
 
@@ -467,6 +489,11 @@ function initDataMgmt() {
     const fd  = new FormData(e.target);
     const id  = fd.get('id');
     const msg = document.getElementById('edit-msg');
+    const validErr = validateDataForm(fd);
+    if (validErr) {
+      msg.textContent = validErr;
+      return;
+    }
     try {
       await api.put(`/api/data/${id}`, {
         date:   fd.get('date'),
@@ -479,6 +506,7 @@ function initDataMgmt() {
       loadSummary();
     } catch (err) {
       msg.textContent = `오류: ${err.message}`;
+      // 오류 시 모달 유지 (입력값 보존)
     }
   });
 
