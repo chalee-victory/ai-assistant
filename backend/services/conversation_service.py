@@ -73,7 +73,7 @@ def list_conversations() -> list[ConversationSummary]:
     items = [_to_summary(doc.id, doc.to_dict()) for doc in docs]
     # updated_at 내림차순 정렬 (ISO 8601은 문자열 비교로 정렬 가능)
     items.sort(key=lambda c: c.updated_at, reverse=True)
-    return items
+    return items[:30]
 
 
 # ── 단건 조회 ─────────────────────────────────────────────

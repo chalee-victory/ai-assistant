@@ -2,8 +2,8 @@
 summary_service.py — 지역별 요약 계산 및 meta/summary 캐시 관리
 
 compute_and_save_summary(): data 전체를 읽어 모든 지역 요약을 재계산한다. (build_summary용)
-compute_and_save_region():  특정 지역 데이터만 읽어 그 지역 요약만 갱신한다. (CRUD용)
-get_summary():              저장된 meta/summary 문서를 그대로 반환한다.
+compute_and_save_region():  row_cache 를 사용해 해당 지역 요약만 갱신한다. (CRUD용)
+get_summary():              메모리 캐시를 우선 반환, 없으면 Firestore 1건 읽기.
 
 추세 필드 구조:
   - trend  : { direction, change_4w_pct }  — 4주 변화율 기준 큰 흐름
@@ -21,6 +21,16 @@ get_summary():              저장된 meta/summary 문서를 그대로 반환한
 from datetime import datetime, timedelta, timezone
 
 from firebase import db
+from services import row_cache
+
+# ── 요약 메모리 캐시 (CRUD 시 무효화, TTL 없음) ──────────────────
+_summary: dict = {}
+_summary_valid: bool = False
+
+
+def _invalidate_summary() -> None:
+    global _summary_valid
+    _summary_valid = False
 
 REGIONS = ["전국", "서울-강북", "서울-강남", "대전", "세종"]
 META_DOC = db.collection("meta").document("summary")
@@ -160,23 +170,19 @@ def compute_and_save_summary() -> None:
         "by_region": region_stats,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
+    _invalidate_summary()
     print(f"[summary] meta/summary 전체 저장 완료 (총 {total_count}건)")
 
 
 # ── 단일 지역 갱신 (CRUD 후 호출) ──────────────────────────────
 def compute_and_save_region(region: str) -> None:
-    """특정 지역의 데이터만 읽어 그 지역 요약만 갱신한다.
+    """row_cache 를 사용해 해당 지역 요약만 갱신한다 (Firestore 읽기 0건).
 
-    CRUD 호출 시 3,600건 대신 약 720건만 읽어 Firestore 무료 한도를 절약한다.
     meta/summary 문서가 없으면 전체 재계산으로 폴백한다.
     """
-    # 1. 해당 지역 데이터만 읽기 (약 720건)
-    docs = db.collection("data").where("region", "==", region).stream()
-    records = []
-    for doc in docs:
-        d = doc.to_dict()
-        records.append({"date": d["date"], "value": float(d["value"])})
-    records.sort(key=lambda r: r["date"])
+    # 1. row_cache 에서 해당 지역 행 취득 (Firestore 읽기 0건)
+    cached = row_cache.get_region(region)
+    records = [{"date": r["date"], "value": r["value"]} for r in cached]
 
     new_stats = _compute_region_stats(records) if records else {}
 
@@ -207,12 +213,18 @@ def compute_and_save_region(region: str) -> None:
         "data_period": data_period,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     })
+    _invalidate_summary()
     print(f"[summary] {region} 요약 갱신 완료 ({len(records)}건)")
 
 
 def get_summary() -> dict:
-    """저장된 meta/summary 문서를 반환한다. 없으면 빈 dict."""
+    """메모리 캐시가 유효하면 즉시 반환, 아니면 Firestore 1건 읽기 후 캐시에 저장."""
+    global _summary, _summary_valid
+    if _summary_valid:
+        return _summary
     doc = META_DOC.get()
     if not doc.exists:
         return {}
-    return doc.to_dict()
+    _summary = doc.to_dict()
+    _summary_valid = True
+    return _summary

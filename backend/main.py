@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from google.api_core.exceptions import ResourceExhausted
 
 from config import ALLOWED_ORIGINS
 from routers import chat, conversations, data
@@ -50,6 +51,14 @@ async def _validation_handler(request: Request, exc: RequestValidationError) -> 
             msg = f"{field}: {raw}" if field else raw
         msgs.append(msg)
     return JSONResponse(status_code=422, content={"detail": " / ".join(msgs)})
+
+
+@app.exception_handler(ResourceExhausted)
+async def _quota_handler(request: Request, exc: ResourceExhausted) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "서버 요청 한도에 도달했습니다. 잠시 후 다시 시도해 주세요."},
+    )
 
 
 # 라우터 등록

@@ -1,10 +1,11 @@
 """
 data_service.py — data 컬렉션 CRUD
 
-생성·수정·삭제 후에는 summary_service.compute_and_save_region()을
-호출해 변경된 지역 요약만 갱신한다 (Firestore 읽기 절약).
+목록 조회와 요약 재계산은 메모리 캐시(row_cache)를 우선 사용해 Firestore 읽기를 줄인다.
+- GET 목록: row_cache에서 필터·정렬·페이지 처리 (Firestore 0읽기, 최초 지역 접근 시 ~720읽기)
+- POST/PUT/DELETE: Firestore 쓰기 후 row_cache 동기 갱신 → compute_and_save_region()은 캐시 사용
 
-문서 ID 규칙: {date}_{region}  예) 2026-09-28_세종
+중복 확인(POST)은 doc_id 단건 get() 유지 (1건 읽기).
 """
 
 from datetime import datetime, timezone
@@ -13,6 +14,7 @@ from fastapi import HTTPException
 
 from firebase import db
 from schemas import DataCreate, DataListResponse, DataResponse, DataUpdate
+from services import row_cache
 from services.summary_service import compute_and_save_region
 
 COLLECTION = "data"
@@ -34,6 +36,7 @@ def create_data(payload: DataCreate) -> DataResponse:
     doc_id = f"{payload.date}_{payload.region}"
     doc_ref = db.collection(COLLECTION).document(doc_id)
 
+    # 중복 확인: 단건 읽기 1회
     if doc_ref.get().exists:
         raise HTTPException(
             status_code=409,
@@ -44,15 +47,24 @@ def create_data(payload: DataCreate) -> DataResponse:
         )
 
     doc_data = {
-        "date": payload.date,
-        "region": payload.region,
-        "value": payload.value,
-        "memo": payload.memo,
+        "date":       payload.date,
+        "region":     payload.region,
+        "value":      payload.value,
+        "memo":       payload.memo,
         "created_at": datetime.now(timezone.utc),
     }
     doc_ref.set(doc_data)
-    compute_and_save_region(payload.region)
 
+    # 캐시 갱신 (이미 로드된 지역이면 즉시 반영, 아니면 다음 get_region() 시 로드)
+    row_cache.add_row({
+        "id":     doc_id,
+        "date":   payload.date,
+        "region": payload.region,
+        "value":  payload.value,
+        "memo":   payload.memo,
+    })
+
+    compute_and_save_region(payload.region)
     return _to_response(doc_id, doc_data)
 
 
@@ -64,24 +76,24 @@ def get_data_list(
     page: int = 1,
     page_size: int = 50,
 ) -> DataListResponse:
-    query = db.collection(COLLECTION)
+    # 대상 지역 목록 결정
+    regions = [region] if region else row_cache.REGIONS
 
-    # region 필터는 Firestore 서버에서 처리 (단일 필드 = 인덱스 불필요)
-    if region:
-        query = query.where("region", "==", region)
-
-    docs = query.stream()
-
-    # 날짜 필터·정렬은 Python에서 처리 (복합 인덱스 생성 불필요)
     items: list[DataResponse] = []
-    for doc in docs:
-        d = doc.to_dict()
-        date = d.get("date", "")
-        if start_date and date < start_date:
-            continue
-        if end_date and date > end_date:
-            continue
-        items.append(_to_response(doc.id, d))
+    for r in regions:
+        for row in row_cache.get_region(r):   # 최초 접근 시만 Firestore 읽기
+            date = row["date"]
+            if start_date and date < start_date:
+                continue
+            if end_date and date > end_date:
+                continue
+            items.append(DataResponse(
+                id=row["id"],
+                date=date,
+                region=row["region"],
+                value=row["value"],
+                memo=row.get("memo", ""),
+            ))
 
     items.sort(key=lambda r: r.date, reverse=True)  # 최신순(내림차순)
 
@@ -98,7 +110,7 @@ def get_data_list(
 # ── 수정 ──────────────────────────────────────────────────
 def update_data(doc_id: str, payload: DataUpdate) -> DataResponse:
     doc_ref = db.collection(COLLECTION).document(doc_id)
-    existing = doc_ref.get()
+    existing = doc_ref.get()   # 1 읽기 (현재 값 필요)
 
     if not existing.exists:
         raise HTTPException(status_code=404, detail=f"문서를 찾을 수 없습니다: {doc_id}")
@@ -108,7 +120,7 @@ def update_data(doc_id: str, payload: DataUpdate) -> DataResponse:
     updated_fields = payload.model_dump(exclude_none=True)
 
     # 변경 후 date/region으로 새 문서 ID 계산
-    new_date = updated_fields.get("date", current["date"])
+    new_date   = updated_fields.get("date",   current["date"])
     new_region = updated_fields.get("region", old_region)
     new_doc_id = f"{new_date}_{new_region}"
 
@@ -123,6 +135,15 @@ def update_data(doc_id: str, payload: DataUpdate) -> DataResponse:
     else:
         doc_ref.update({**updated_fields, "updated_at": datetime.now(timezone.utc)})
 
+    # 캐시 갱신
+    row_cache.update_row(doc_id, old_region, {
+        "id":     new_doc_id,
+        "date":   new_date,
+        "region": new_region,
+        "value":  float(updated_fields.get("value", current["value"])),
+        "memo":   updated_fields.get("memo", current.get("memo", "")),
+    })
+
     # region이 바뀌었으면 이전 지역과 새 지역 모두 갱신
     affected = {new_region}
     if new_region != old_region:
@@ -136,11 +157,15 @@ def update_data(doc_id: str, payload: DataUpdate) -> DataResponse:
 # ── 삭제 ──────────────────────────────────────────────────
 def delete_data(doc_id: str) -> None:
     doc_ref = db.collection(COLLECTION).document(doc_id)
-    snapshot = doc_ref.get()
+    snapshot = doc_ref.get()   # 1 읽기 (존재 확인 + region 취득)
 
     if not snapshot.exists:
         raise HTTPException(status_code=404, detail=f"문서를 찾을 수 없습니다: {doc_id}")
 
     region = snapshot.to_dict()["region"]
     doc_ref.delete()
+
+    # 캐시 갱신
+    row_cache.remove_row(doc_id, region)
+
     compute_and_save_region(region)

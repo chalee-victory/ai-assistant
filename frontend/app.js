@@ -10,7 +10,7 @@ const state = {
   coldStartTimer: null,   // 콜드 스타트 타이머
   dataPage:       1,
   dataPageSize:   20,
-  dataFilters:    { region: '', start: '', end: '' },
+  dataFilters:    { region: '전국', start: '', end: '' },
   dataFirstLoad:  false,  // 데이터 관리 탭 최초 로드 여부
 };
 
