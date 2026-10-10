@@ -65,6 +65,12 @@ def _is_buy_question(message: str) -> bool:
     return any(kw in message for kw in _BUY_KEYWORDS)
 
 
+# ── 지수값 포맷 헬퍼 ──────────────────────────────────────
+def _fv(val) -> str:
+    """지수값을 소수 둘째 자리 문자열로 변환 (None이면 '-')."""
+    return f"{float(val):.2f}" if val is not None else "-"
+
+
 # ── 순위 계산 ─────────────────────────────────────────────
 def _compute_rankings(by_region: dict) -> list[str]:
     """
@@ -132,10 +138,15 @@ def _build_system_prompt(summary: dict) -> str:
         "아래 데이터를 근거로 사용자 질문에 한국어로 간결하게 답하세요.",
         "수치 계산은 이미 완료된 값만 사용하고, 해석과 설명을 담당합니다.",
         "",
+        "★ 숫자 사용 최우선 규칙",
+        "- 숫자는 반드시 이번 요청 시스템 프롬프트의 데이터 섹션 값만 사용합니다.",
+        "  이전 대화에 나온 숫자는 데이터가 갱신됐을 수 있으므로 절대 재사용하지 않습니다.",
+        "- 지수값은 소수 둘째 자리(예: 101.00), 변화율은 부호+소수 둘째 자리(예: +0.78%).",
+        "",
         "## 데이터 범위",
+        f"- 데이터 기준 시각: {updated_at_kst}  ← 이 요청에 주입된 최신 데이터 기준",
         "- 대상 지역: 전국, 서울-강북, 서울-강남, 대전, 세종 (5개)",
         f"- 데이터 기간: {period.get('start', '')} ~ {period.get('end', '')} | 총 {total}건",
-        f"- 요약 갱신 시각: {updated_at_kst}",
         "",
         "## 지역별 요약",
     ]
@@ -152,9 +163,9 @@ def _build_system_prompt(summary: dict) -> str:
         streak = stats.get("streak", {})
         lines += [
             f"### {region}",
-            f"- 최신값: {latest.get('value')} ({latest.get('date')})",
-            f"- 고점: {peak.get('value')} ({peak.get('date')}) | 저점: {trough.get('value')} ({trough.get('date')})",
-            f"- 평균: {stats.get('average')} | 고점 대비: {stats.get('from_peak_pct'):+.2f}%",
+            f"- 최신값: {_fv(latest.get('value'))} ({latest.get('date')})",
+            f"- 고점: {_fv(peak.get('value'))} ({peak.get('date')}) | 저점: {_fv(trough.get('value'))} ({trough.get('date')})",
+            f"- 평균: {_fv(stats.get('average'))} | 고점 대비: {stats.get('from_peak_pct'):+.2f}%",
             (
                 f"- 4주 변화: {stats.get('change_4w_pct'):+.2f}% | "
                 f"52주 변화: {stats.get('change_52w_pct'):+.2f}% | "
@@ -188,7 +199,8 @@ def _build_system_prompt(summary: dict) -> str:
         "## 답변 방식",
         "- 2~4문장으로 간결하게 답합니다.",
         "- 수치를 언급할 때는 근거(값과 날짜)를 반드시 함께 제시합니다.",
-        "  형식 예) ○○은 YYYY-MM-DD 고점(A) 대비 현재(B, YYYY-MM-DD) 약 X% 낮은 수준입니다.",
+        "  형식 예) ○○은 YYYY-MM-DD 고점(A.AA) 대비 현재(B.BB, YYYY-MM-DD) 약 X% 낮은 수준입니다.",
+        "- 지수값은 소수 둘째 자리(예: 101.00), 변화율은 부호+소수 둘째 자리(예: +0.78%)로 표기합니다.",
         "- 하락폭 표현 시 부호와 방향 동사를 함께 쓰지 않습니다.",
         "  올바른 예: 'X% 하락' 또는 '-X%' / 틀린 예: '-X% 떨어졌다'",
         "- '전체 변화'를 말할 때는 기간을 반드시 함께 표기합니다. 예: '2012-11-26 이후 +X%'",
@@ -200,14 +212,14 @@ def _build_system_prompt(summary: dict) -> str:
         "  직접 계산하지 않습니다.",
         "",
         "## 지수 해석 규칙 (반드시 준수)",
-        f"- 기준시점: {base_date} = 100 (5개 지역 공통)",
+        f"- 기준시점: {base_date} = 100.00 (5개 지역 공통)",
         "- 지수는 지역별 가격 변화율 비교에만 사용합니다. 지역 간 가격 수준 비교 금지.",
         "- 변화는 반드시 퍼센트(%)로 표현합니다. 포인트 차이를 %로 말하지 않습니다.",
         "- 요약에 없는 수치는 지어내지 마세요.",
         "",
         "## 답할 수 없는 질문 처리",
         "- 금액(원) 질문: 사용자가 실제로 가격·금액을 물었을 때만 적용합니다.",
-        "  이 데이터는 가격 지수(기준시점=100)이므로 원화 금액은 알 수 없다고 밝히고,",
+        "  이 데이터는 가격 지수(기준시점=100.00)이므로 원화 금액은 알 수 없다고 밝히고,",
         "  해당 지역의 지수 최신값·전체 변화율·4주 추세를 대신 안내하세요.",
         "- 제공하지 않는 지역 질문: 이 데이터는 전국·서울-강북·서울-강남·대전·세종 5개 지역만 있음을 알리고,",
         "  가장 넓은 범위인 전국 지수를 참고 기준으로 제안하세요.",

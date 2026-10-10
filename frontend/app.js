@@ -383,7 +383,7 @@ function buildRegionCard(region, s, periodStart) {
     <div class="summary-card ${region === '전국' ? 'national' : ''}">
       <div class="card-title">${esc(region)}</div>
       <div class="card-latest-row">
-        <span class="card-latest">${latest.value ?? '-'}</span>
+        <span class="card-latest">${latest.value != null ? Number(latest.value).toFixed(2) : '-'}</span>
       </div>
       <div class="card-date">${esc(latest.date ?? '-')} 기준</div>
       <div class="card-rows">

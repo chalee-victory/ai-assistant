@@ -19,6 +19,7 @@ from services.chat_service import (
     _FORBIDDEN_WORDS,
     _REGION_ORDER,
     _test_message,
+    _call_gpt,
 )
 
 # ── 숫자 검증 헬퍼 ────────────────────────────────────────
@@ -92,6 +93,21 @@ def check_top4w_rank(answer: str, summary: dict) -> list[str]:
     return []
 
 
+def check_decimal_format(answer: str) -> list[str]:
+    """지수값(70~130 범위) 숫자가 소수 둘째 자리 형식인지 검사."""
+    errors: list[str] = []
+    # 퍼센트 기호 앞 숫자는 변화율이므로 제외 (예: +0.78%)
+    # 순수 지수값: 70~130 범위 정수 또는 소수 (% 없음)
+    for m in re.finditer(r'(?<![+\-\d])(\d{2,3}(?:\.\d+)?)(?!\s*%)', answer):
+        raw = m.group(1)
+        num = float(raw)
+        if 70.0 <= num <= 130.0:
+            decimal_part = raw.split('.')[1] if '.' in raw else ''
+            if len(decimal_part) != 2:
+                errors.append(f"지수값 형식 오류 '{raw}' (소수 둘째 자리 필요, 예: 101.00)")
+    return errors
+
+
 # ── 테스트 케이스 ──────────────────────────────────────────
 # check_numbers=True: 숫자 검증 + 4주 순위 검사 활성화
 CASES = [
@@ -149,6 +165,7 @@ def run_case(
         word_errors, word_pass,
         num_errors, num_pass, num_pairs_count,
         rank_errors, rank_pass,
+        decimal_errors, decimal_pass,
         overall_pass
     }
     """
@@ -177,7 +194,14 @@ def run_case(
 
     num_pass  = len(num_errors)  == 0
     rank_pass = len(rank_errors) == 0
-    overall_pass = word_pass and num_pass and rank_pass
+
+    # 소수 형식 검사 (check_numbers 케이스만)
+    decimal_errors: list[str] = []
+    if case["check_numbers"]:
+        decimal_errors = check_decimal_format(answer)
+    decimal_pass = len(decimal_errors) == 0
+
+    overall_pass = word_pass and num_pass and rank_pass and decimal_pass
 
     return {
         "answer":          answer,
@@ -189,8 +213,69 @@ def run_case(
         "num_pairs_count": num_pairs_count,
         "rank_errors":     rank_errors,
         "rank_pass":       rank_pass,
+        "decimal_errors":  decimal_errors,
+        "decimal_pass":    decimal_pass,
         "check_numbers":   case["check_numbers"],
         "overall_pass":    overall_pass,
+    }
+
+
+def run_stale_data_case(system_prompt: str, summary: dict) -> dict:
+    """
+    테스트 ⑥: 오래된 대전 수치(99.99)를 assistant 메시지에 심은 뒤
+    '대전 최신값 알려줘'를 물었을 때 현재 요약값으로 답하는지 확인.
+    """
+    by_region = summary.get("by_region", {})
+    daejeon = by_region.get("대전", {})
+    current_latest = daejeon.get("latest", {})
+    current_val = float(current_latest.get("value", 0))
+    current_date = current_latest.get("date", "")
+
+    fake_val = 99.99
+    fake_date = "2020-01-01"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        # 오래된 수치를 담은 가짜 assistant 메시지
+        {
+            "role": "assistant",
+            "content": (
+                f"대전의 최신 지수값은 {fake_val:.2f}이며, "
+                f"기준일은 {fake_date}입니다."
+            ),
+        },
+        {"role": "user", "content": "대전 최신값 알려줘"},
+    ]
+
+    answer = _call_gpt(messages, temperature=0.3)
+
+    errors: list[str] = []
+
+    # 1) 가짜 값(99.99)이 답변에 없어야 함
+    if f"{fake_val:.2f}" in answer or str(fake_val) in answer:
+        errors.append(f"오래된 가짜 값 {fake_val:.2f} 이 답변에 포함됨")
+
+    # 2) 현재 값 또는 현재 날짜가 답변에 포함돼야 함
+    current_val_str = f"{current_val:.2f}"
+    if current_val_str not in answer and current_date not in answer:
+        errors.append(
+            f"현재 대전 값({current_val_str}, {current_date}) 이 답변에 없음"
+        )
+
+    # 3) 소수 형식 검사
+    decimal_errors = check_decimal_format(answer)
+
+    overall_pass = len(errors) == 0 and len(decimal_errors) == 0
+
+    return {
+        "answer":         answer,
+        "stale_errors":   errors,
+        "stale_pass":     len(errors) == 0,
+        "decimal_errors": decimal_errors,
+        "decimal_pass":   len(decimal_errors) == 0,
+        "current_val":    current_val_str,
+        "current_date":   current_date,
+        "overall_pass":   overall_pass,
     }
 
 
@@ -217,6 +302,34 @@ def print_result(case: dict, r: dict) -> None:
         )
         print(f"  [4주 순위]    {rk_label}")
 
+        dc_label = (
+            "[PASS]" if r["decimal_pass"]
+            else f"[FAIL] {'; '.join(r['decimal_errors'])}"
+        )
+        print(f"  [소수 형식]   {dc_label}")
+
+    overall = "[PASS]" if r["overall_pass"] else "[FAIL]"
+    print(f"  => 종합: {overall}")
+
+
+def print_stale_result(r: dict) -> None:
+    print(f"\n답변:")
+    print(r["answer"])
+    print(f"\n  [참고] 현재 대전 값: {r['current_val']} ({r['current_date']})")
+    print()
+
+    s_label = (
+        "[PASS]" if r["stale_pass"]
+        else f"[FAIL] {'; '.join(r['stale_errors'])}"
+    )
+    print(f"  [오래된 데이터 무시] {s_label}")
+
+    dc_label = (
+        "[PASS]" if r["decimal_pass"]
+        else f"[FAIL] {'; '.join(r['decimal_errors'])}"
+    )
+    print(f"  [소수 형식]          {dc_label}")
+
     overall = "[PASS]" if r["overall_pass"] else "[FAIL]"
     print(f"  => 종합: {overall}")
 
@@ -236,6 +349,8 @@ def main() -> int:
           flush=True)
 
     all_pass = True
+
+    # ①~⑤ 케이스
     for case in CASES:
         sep = "=" * 64
         print(sep)
@@ -249,6 +364,20 @@ def main() -> int:
         if not r["overall_pass"]:
             all_pass = False
         print()
+
+    # ⑥ 오래된 데이터 무시 + 소수 형식
+    sep = "=" * 64
+    print(sep)
+    print("[⑥ 오래된 데이터 무시 + 소수 형식]")
+    print("조건: assistant 히스토리에 99.99(2020-01-01)를 심은 뒤 현재값으로 답하는지 확인")
+    print("질문: 대전 최신값 알려줘")
+    print("GPT 호출 중...", flush=True)
+
+    r6 = run_stale_data_case(system_prompt, summary)
+    print_stale_result(r6)
+    if not r6["overall_pass"]:
+        all_pass = False
+    print()
 
     print("=" * 64)
     print("최종 결과:", "모두 PASS" if all_pass else "일부 FAIL")
