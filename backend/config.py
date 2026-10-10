@@ -5,8 +5,11 @@ config.py — 환경변수 로드 및 앱 설정값 관리
 키를 코드에 직접 쓰지 않는다.
 """
 
+import logging
 import os
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 # 이 파일 기준으로 .env 탐색 (backend/.env)
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
@@ -31,4 +34,9 @@ if not FIREBASE_SERVICE_ACCOUNT_JSON and not FIREBASE_KEY_PATH:
 
 # ── CORS ─────────────────────────────────────────────────
 _raw_origins: str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
-ALLOWED_ORIGINS: list[str] = [o.strip() for o in _raw_origins.split(",") if o.strip()]
+ALLOWED_ORIGINS: list[str] = [
+    o.strip().rstrip("/")
+    for o in _raw_origins.split(",")
+    if o.strip()
+]
+logger.info("[CORS] 허용 출처 %d개: %s", len(ALLOWED_ORIGINS), ", ".join(ALLOWED_ORIGINS))
