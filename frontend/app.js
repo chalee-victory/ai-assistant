@@ -25,6 +25,10 @@ async function apiFetch(method, path, body) {
     const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
     throw new Error(err.detail || `HTTP ${res.status}`);
   }
+  // 204 No Content 또는 응답 본문이 없는 경우 json() 호출 금지
+  if (res.status === 204) return null;
+  const ct = res.headers.get('content-type') || '';
+  if (!ct.includes('application/json')) return null;
   return res.json();
 }
 
@@ -520,7 +524,9 @@ function renderDataTable(items) {
       <td>${esc(item.memo || '')}</td>
       <td>
         <button class="btn-edit" data-id="${esc(item.id)}">수정</button>
-        <button class="btn-del"  data-id="${esc(item.id)}">삭제</button>
+        <button class="btn-del"  data-id="${esc(item.id)}"
+                data-date="${esc(item.date)}" data-region="${esc(item.region)}"
+                data-value="${Number(item.value).toFixed(2)}">삭제</button>
       </td>
     </tr>`).join('');
 
@@ -533,7 +539,9 @@ function renderDataTable(items) {
 
   tbody.querySelectorAll('.btn-del').forEach(btn => {
     btn.addEventListener('click', async () => {
-      if (!confirm('이 데이터를 삭제하시겠습니까?')) return;
+      const { date, region, value } = btn.dataset;
+      const msg = `${date} ${region} (${value}) 데이터를 삭제할까요?\n요약 통계가 다시 계산됩니다.`;
+      if (!confirm(msg)) return;
       try {
         await api.del(`/api/data/${btn.dataset.id}`);
         loadData();
