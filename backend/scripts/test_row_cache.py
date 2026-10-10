@@ -146,6 +146,63 @@ def test_set_region():
     _pass("set_region")
 
 
+# ── 테스트 8: 로드 중 예외 → 캐시 미할당 ──────────────────────────
+def test_load_exception_leaves_cache_empty():
+    """_load_from_firestore 도중 예외 발생 시 _rows에 아무것도 남지 않아야 한다."""
+    _reset()
+    original = rc._load_from_firestore
+
+    def fake_fail(region):
+        raise RuntimeError("ResourceExhausted: 할당량 초과 (테스트용)")
+
+    rc._load_from_firestore = fake_fail
+    try:
+        try:
+            rc.get_region("서울-강남")
+            _fail("load_exception_leaves_cache_empty", "예외가 발생해야 함")
+        except RuntimeError:
+            pass  # 예외 전파 확인
+        if "서울-강남" in rc._rows:
+            _fail("load_exception_leaves_cache_empty", "실패 후 캐시에 데이터가 남아있음")
+    finally:
+        rc._load_from_firestore = original
+    _pass("load_exception_leaves_cache_empty")
+
+
+# ── 테스트 9: 로드 성공 → 캐시 완전 할당 ────────────────────────
+def test_load_success_full_data_cached():
+    """_load_from_firestore 성공 시 전체 데이터가 _rows에 정렬 저장되어야 한다."""
+    _reset()
+    original = rc._load_from_firestore
+
+    fake_rows = [
+        {"id": f"2024-01-{i:02d}_대전", "date": f"2024-01-{i:02d}",
+         "region": "대전", "value": float(90 + i), "memo": ""}
+        for i in range(1, 5)
+    ]
+
+    def fake_ok(region):
+        # 원본 함수와 동일하게: 전체 수집 후 캐시 대입
+        rows = sorted(fake_rows, key=lambda r: r["date"])
+        rc._rows[region] = rows
+        return rows
+
+    rc._load_from_firestore = fake_ok
+    try:
+        result = rc.get_region("대전")
+    finally:
+        rc._load_from_firestore = original
+
+    if len(result) != 4:
+        _fail("load_success_full_data_cached", f"행 수 오류: {len(result)}")
+    if "대전" not in rc._rows:
+        _fail("load_success_full_data_cached", "캐시에 저장 안 됨")
+    dates = [r["date"] for r in rc._rows["대전"]]
+    if dates != sorted(dates):
+        _fail("load_success_full_data_cached", f"정렬 오류: {dates}")
+    _pass("load_success_full_data_cached")
+
+
 # ── 실행 ─────────────────────────────────────────────────────────
 if __name__ == "__main__":
     print("row_cache 단위 테스트 시작\n")
@@ -156,4 +213,6 @@ if __name__ == "__main__":
     test_update_row_region_change()
     test_filter_and_pagination()
     test_set_region()
+    test_load_exception_leaves_cache_empty()
+    test_load_success_full_data_cached()
     print("\n모든 테스트 통과")

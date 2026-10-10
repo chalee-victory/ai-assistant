@@ -67,13 +67,16 @@ def create_conversation(payload: ConversationCreate) -> ConversationDetail:
     return _to_detail(doc_ref.id, doc_data)
 
 
-# ── 목록 조회 (updated_at 최신순) ────────────────────────────
+# ── 목록 조회 (updated_at 최신순, 최대 30건) ─────────────────
 def list_conversations() -> list[ConversationSummary]:
-    docs = db.collection(COLLECTION).stream()
-    items = [_to_summary(doc.id, doc.to_dict()) for doc in docs]
-    # updated_at 내림차순 정렬 (ISO 8601은 문자열 비교로 정렬 가능)
-    items.sort(key=lambda c: c.updated_at, reverse=True)
-    return items[:30]
+    # Firestore 쿼리 단에서 정렬·상한 처리 → 읽기 건수 30건으로 고정
+    docs = (
+        db.collection(COLLECTION)
+        .order_by("updated_at", direction="DESCENDING")
+        .limit(30)
+        .stream()
+    )
+    return [_to_summary(doc.id, doc.to_dict()) for doc in docs]
 
 
 # ── 단건 조회 ─────────────────────────────────────────────
