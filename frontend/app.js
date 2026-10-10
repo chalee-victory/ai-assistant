@@ -62,6 +62,13 @@ function validateDataForm(fd) {
   const date = fd.get('date');
   const val  = fd.get('value');
   if (!date || !date.trim()) return '날짜를 입력해주세요.';
+  const DAY_KO = ['월', '화', '수', '목', '금', '토', '일'];
+  const dt = new Date(date + 'T00:00:00');   // 로컬 시간 기준 파싱
+  const dow = dt.getDay();                   // 0=일, 1=월
+  if (dow !== 1) {
+    const dayName = DAY_KO[dow === 0 ? 6 : dow - 1];
+    return `주간지수 날짜는 월요일이어야 합니다. (선택한 날짜: ${date} ${dayName}요일)`;
+  }
   const num = parseFloat(val);
   if (!val || !val.trim()) return '지수값을 입력해주세요.';
   if (isNaN(num) || num <= 0) return '지수값은 0보다 큰 숫자로 입력해주세요.';

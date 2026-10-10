@@ -83,7 +83,7 @@ def get_data_list(
             continue
         items.append(_to_response(doc.id, d))
 
-    items.sort(key=lambda r: r.date)
+    items.sort(key=lambda r: r.date, reverse=True)  # 최신순(내림차순)
 
     total = len(items)
     start = (page - 1) * page_size

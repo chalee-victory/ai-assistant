@@ -8,6 +8,7 @@ schemas.py — Pydantic 입출력 모델
 """
 
 import re
+from datetime import date as _date
 from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -15,11 +16,20 @@ from pydantic import BaseModel, Field, field_validator
 # ── 타입 별칭 ─────────────────────────────────────────────
 RegionType = Literal["전국", "서울-강북", "서울-강남", "대전", "세종"]
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_WEEKDAY_KO = ["월", "화", "수", "목", "금", "토", "일"]
 
 
 def _check_date(v: Optional[str]) -> Optional[str]:
-    if v is not None and not _DATE_RE.match(v):
+    if v is None:
+        return v
+    if not _DATE_RE.match(v):
         raise ValueError("날짜 형식은 YYYY-MM-DD여야 합니다")
+    dt = _date.fromisoformat(v)
+    if dt.weekday() != 0:
+        day_ko = _WEEKDAY_KO[dt.weekday()]
+        raise ValueError(
+            f"주간지수 날짜는 월요일이어야 합니다. (선택한 날짜: {v} {day_ko}요일)"
+        )
     return v
 
 
