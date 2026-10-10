@@ -6,14 +6,17 @@ chat_service.py — AI 채팅 핵심 로직
   2. 요약 데이터로 시스템 프롬프트 조립 + 길이 콘솔 출력
   3. conversation_id 없으면 새 대화 생성, 있으면 기존 대화 조회
   4. 최근 10개 메시지를 GPT 입력으로 변환
-  5. GPT 호출 (max_tokens=500, temperature=0.3)
-  6. user → assistant 순서로 대화에 저장
-  7. 새 대화면 첫 질문 앞 20자를 제목으로 자동 설정
-  8. conversation_id + 답변 반환
+  5. 매수 의도 감지 시 리마인더 system 메시지를 user 메시지 바로 앞에 삽입
+  6. GPT 호출 (max_tokens=500, temperature=0.3)
+  7. 매수 질문 답변에 금지어 포함 시 1회 재생성 (temperature=0, INFO 로그)
+  8. user → assistant 순서로 대화에 저장
+  9. 새 대화면 첫 질문 앞 20자를 제목으로 자동 설정
+  10. conversation_id + 답변 반환
 
 분업 원칙: 수치 계산은 Python(summary_service), 해석·문장화는 GPT.
 """
 
+import logging
 import openai
 from fastapi import HTTPException
 
@@ -23,9 +26,52 @@ from schemas import ChatRequest, ChatResponse, ConversationCreate
 from services.conversation_service import add_message, create_conversation, get_conversation
 from services.summary_service import get_summary
 
+logger = logging.getLogger(__name__)
+
 _client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
 MAX_HISTORY = 10  # GPT에 전달하는 최근 대화 이력 개수
+
+
+# ── 매수·투자 의도 감지 키워드 ─────────────────────────────
+_BUY_KEYWORDS: list[str] = [
+    "사려면", "살까", "사도 돼", "사도돼", "사야", "사야지",
+    "매수", "투자", "추천", "어디가 좋",
+]
+
+# ── 매수 질문 답변 금지어 ───────────────────────────────────
+_FORBIDDEN_WORDS: list[str] = [
+    "매력적", "유망", "추천드립니다", "사기 좋은", "좋은 선택",
+]
+
+# ── 매수 질문 감지 시 user 메시지 앞에 삽입할 system 리마인더 ─
+_BUY_REMINDER = """\
+[매수·투자 질문 감지 — 지금 당장 아래 규칙을 적용하세요]
+절대 금지: 특정 지역 추천, '매력적', '유망', '사기 좋은', '좋은 선택', '추천드립니다'
+절대 금지: '원화 금액은 알 수 없습니다' 문구 (이 질문 유형에 사용 금지)
+반드시 아래 형식으로만 답하세요:
+  특정 지역을 사라고 추천드릴 수는 없지만, 판단에 참고할 지표를 비교해 드릴게요.
+  - 4주 추세가 가장 강한 곳: (지역, 수치)
+  - 고점 대비 가장 많이 내려온 곳: (지역, 수치)
+  - 52주 변화: (각 지역 수치)
+  과거 상승률이 미래 상승을 보장하지 않습니다. 실제 결정은 가격·입지·대출 조건 등을 함께 고려하세요."""
+
+
+def _is_buy_question(message: str) -> bool:
+    """매수·투자 의도 키워드가 포함된 질문인지 판별한다."""
+    return any(kw in message for kw in _BUY_KEYWORDS)
+
+
+# ── GPT 호출 헬퍼 ─────────────────────────────────────────
+def _call_gpt(messages: list[dict], temperature: float = 0.3) -> str:
+    """OpenAI API 호출 → 답변 문자열 반환."""
+    response = _client.chat.completions.create(
+        model=OPENAI_MODEL,
+        messages=messages,
+        max_tokens=500,
+        temperature=temperature,
+    )
+    return response.choices[0].message.content.strip()
 
 
 # ── 시스템 프롬프트 조립 ─────────────────────────────────────
@@ -85,6 +131,23 @@ def _build_system_prompt(summary: dict) -> str:
         ]
 
     lines += [
+        # ── 매수·투자 섹션을 답변 방식보다 앞에 배치 (최우선 적용) ──
+        "## 매수·투자 질문 (최우선 규칙 — 반드시 준수)",
+        "'사려면', '살까', '사도 돼', '사야', '매수', '투자', '추천', '어디가 좋' 등",
+        "매수·투자 의도가 있는 질문에는 이 섹션의 규칙을 가장 먼저 적용합니다.",
+        "",
+        "【절대 금지 표현】",
+        "- 특정 지역을 '사라'고 추천하는 모든 표현",
+        "- '매력적', '유망', '사기 좋은', '좋은 선택', '추천드립니다'",
+        "- '원화 금액은 알 수 없습니다' 문구 (이 질문 유형에는 사용하지 않음)",
+        "",
+        "【반드시 아래 형식으로 답변하세요】",
+        "  특정 지역을 사라고 추천드릴 수는 없지만, 판단에 참고할 지표를 비교해 드릴게요.",
+        "  - 4주 추세가 가장 강한 곳: (지역, 수치)",
+        "  - 고점 대비 가장 많이 내려온 곳: (지역, 수치)",
+        "  - 52주 변화: (각 지역 수치)",
+        "  과거 상승률이 미래 상승을 보장하지 않습니다. 실제 결정은 가격·입지·대출 조건 등을 함께 고려하세요.",
+        "",
         "## 답변 방식",
         "- 2~4문장으로 간결하게 답합니다.",
         "- 수치를 언급할 때는 근거(값과 날짜)를 반드시 함께 제시합니다.",
@@ -104,10 +167,6 @@ def _build_system_prompt(summary: dict) -> str:
         "- 요약에 없는 수치는 지어내지 마세요.",
         "",
         "## 답할 수 없는 질문 처리",
-        "- 매수·투자 추천 질문(예: '어디 사야 해?', '지금 사도 돼?', '어디가 좋아?'):",
-        "  특정 지역을 추천하거나 '매력적', '유망', '사기 좋은' 같은 투자 판단을 하지 않습니다.",
-        "  대신 5개 지역의 4주 추세·최근 흐름·고점 대비 %·52주 변화를 비교해 제공합니다.",
-        "  '과거 상승률이 높다고 앞으로도 오른다는 의미는 아닙니다. 실제 결정은 가격·입지·대출 조건 등을 함께 고려하세요.'라고 안내합니다.",
         "- 금액(원) 질문: 사용자가 실제로 가격·금액을 물었을 때만 적용합니다.",
         "  이 데이터는 가격 지수(기준시점=100)이므로 원화 금액은 알 수 없다고 밝히고,",
         "  해당 지역의 지수 최신값·전체 변화율·4주 추세를 대신 안내하세요.",
@@ -136,6 +195,29 @@ def _raise_gpt_error(e: Exception) -> None:
     raise HTTPException(status_code=502, detail=msg)
 
 
+# ── 테스트용 헬퍼 (Firestore 없이 GPT 호출 + 재생성 로직) ──
+def _test_message(system_prompt: str, message: str) -> tuple[str, bool]:
+    """
+    test_chat_rules.py 전용: Firestore 없이 GPT 호출 + 재생성 로직 실행.
+    Returns: (answer, was_regenerated)
+    """
+    is_buy = _is_buy_question(message)
+    messages: list[dict] = [{"role": "system", "content": system_prompt}]
+    if is_buy:
+        messages.append({"role": "system", "content": _BUY_REMINDER})
+    messages.append({"role": "user", "content": message})
+
+    answer = _call_gpt(messages, temperature=0.3)
+    was_regenerated = False
+    if is_buy:
+        bad = [w for w in _FORBIDDEN_WORDS if w in answer]
+        if bad:
+            logger.info("[test] 금지어 감지 %s → 재생성", bad)
+            answer = _call_gpt(messages, temperature=0.0)
+            was_regenerated = True
+    return answer, was_regenerated
+
+
 # ── 메인 함수 ─────────────────────────────────────────────
 def chat(request: ChatRequest) -> ChatResponse:
     # 1. 요약 캐시 읽기 (Firestore 1건, data 컬렉션 미접근)
@@ -162,29 +244,36 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     # 4. 최근 MAX_HISTORY 개 메시지 → GPT 입력 형식 변환
     history = detail.messages[-MAX_HISTORY:]
-    gpt_messages = [
+    gpt_messages: list[dict] = [
         {"role": "system", "content": system_prompt},
         *[{"role": m.role, "content": m.content} for m in history],
-        {"role": "user", "content": request.message},
     ]
 
-    # 5. GPT 호출
+    # 5. 매수 의도 감지 시 리마인더 system 메시지를 user 메시지 바로 앞에 삽입
+    is_buy = _is_buy_question(request.message)
+    if is_buy:
+        gpt_messages.append({"role": "system", "content": _BUY_REMINDER})
+
+    gpt_messages.append({"role": "user", "content": request.message})
+
+    # 6. GPT 호출 + 7. 매수 금지어 감지 시 1회 재생성
     try:
-        response = _client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=gpt_messages,
-            max_tokens=500,
-            temperature=0.3,
-        )
-        answer = response.choices[0].message.content.strip()
+        answer = _call_gpt(gpt_messages, temperature=0.3)
+
+        if is_buy:
+            bad = [w for w in _FORBIDDEN_WORDS if w in answer]
+            if bad:
+                logger.info("[chat] 금지어 감지 %s → 재생성", bad)
+                answer = _call_gpt(gpt_messages, temperature=0.0)
+
     except openai.OpenAIError as e:
         _raise_gpt_error(e)
 
-    # 6. 대화에 메시지 저장 (user → assistant 순서)
+    # 8. 대화에 메시지 저장 (user → assistant 순서)
     add_message(conv_id, "user", request.message)
     add_message(conv_id, "assistant", answer)
 
-    # 7. 새 대화면 첫 질문 앞 20자를 제목으로 자동 설정
+    # 9. 새 대화면 첫 질문 앞 20자를 제목으로 자동 설정
     if is_new:
         title = request.message[:20] + ("..." if len(request.message) > 20 else "")
         db.collection("conversations").document(conv_id).update({"title": title})
