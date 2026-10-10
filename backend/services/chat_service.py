@@ -34,7 +34,16 @@ def _build_system_prompt(summary: dict) -> str:
     base_date = summary.get("index_base_date", "2026-07-06")
     period = summary.get("data_period", {})
     total = summary.get("total_count", 0)
-    updated_at = summary.get("updated_at", "")
+
+    # 갱신 시각을 KST(UTC+9)로 변환해 표시
+    updated_at_raw = summary.get("updated_at", "")
+    try:
+        from datetime import datetime, timezone, timedelta
+        _kst = timezone(timedelta(hours=9))
+        _dt = datetime.fromisoformat(updated_at_raw).astimezone(_kst)
+        updated_at_kst = _dt.strftime("%Y-%m-%d %H:%M (KST)")
+    except Exception:
+        updated_at_kst = updated_at_raw
 
     lines = [
         "당신은 한국부동산원 주간 아파트 매매가격지수 분석 비서입니다.",
@@ -44,12 +53,18 @@ def _build_system_prompt(summary: dict) -> str:
         "## 데이터 범위",
         f"- 대상 지역: 전국, 서울-강북, 서울-강남, 대전, 세종 (5개)",
         f"- 데이터 기간: {period.get('start', '')} ~ {period.get('end', '')} | 총 {total}건",
-        f"- 요약 갱신 시각: {updated_at}",
+        f"- 요약 갱신 시각: {updated_at_kst}",
         "",
         "## 지역별 요약",
     ]
 
-    for region, stats in summary.get("by_region", {}).items():
+    # 지역 순서 고정: 전국 → 서울-강북 → 서울-강남 → 대전 → 세종
+    _region_order = ["전국", "서울-강북", "서울-강남", "대전", "세종"]
+    _by_region = summary.get("by_region", {})
+    for region in _region_order:
+        stats = _by_region.get(region)
+        if stats is None:
+            continue
         latest = stats.get("latest", {})
         peak   = stats.get("max", {})
         trough = stats.get("min", {})
@@ -73,7 +88,7 @@ def _build_system_prompt(summary: dict) -> str:
         "## 답변 방식",
         "- 2~4문장으로 간결하게 답합니다.",
         "- 수치를 언급할 때는 근거(값과 날짜)를 반드시 함께 제시합니다.",
-        "  예) 세종은 2021-05-10 고점(138.54) 대비 현재(99.71, 2026-09-28) 약 28.03% 낮은 수준입니다.",
+        "  형식 예) ○○은 YYYY-MM-DD 고점(X) 대비 현재(Y, YYYY-MM-DD) 약 Z% 낮은 수준입니다.",
         "- 하락폭 표현 시 부호와 방향 동사를 함께 쓰지 않습니다.",
         "  올바른 예: '28.03% 하락' 또는 '-28.03%' / 틀린 예: '-28.03% 떨어졌다'",
         "",
