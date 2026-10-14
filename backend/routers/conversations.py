@@ -12,7 +12,9 @@ from fastapi import APIRouter
 from schemas import ConversationCreate, ConversationDetail, ConversationSummary
 from services import conversation_service
 
-router = APIRouter(prefix="/api/conversations", tags=["conversations"])
+_503 = {503: {"description": "Firestore 요청 한도 초과"}}
+
+router = APIRouter(prefix="/api/conversations", tags=["conversations"], responses=_503)
 
 
 @router.post("", response_model=ConversationDetail, status_code=201, summary="대화 생성")

@@ -10,7 +10,9 @@ from fastapi import APIRouter, Query
 from schemas import DataCreate, DataListResponse, DataResponse, DataUpdate
 from services import data_service, summary_service
 
-router = APIRouter(prefix="/api/data", tags=["data"])
+_503 = {503: {"description": "Firestore 요청 한도 초과"}}
+
+router = APIRouter(prefix="/api/data", tags=["data"], responses=_503)
 
 
 # ── 요약 조회 (/{id} 보다 앞에 등록) ──────────────────────────

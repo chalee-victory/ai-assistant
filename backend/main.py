@@ -2,6 +2,15 @@
 main.py — FastAPI 앱 생성, CORS 설정, 라우터 등록
 """
 
+import logging
+
+# uvicorn 로그와 함께 [CORS], [CACHE] INFO 로그가 출력되도록 설정
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s — %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +68,12 @@ async def _quota_handler(request: Request, exc: ResourceExhausted) -> JSONRespon
         status_code=503,
         content={"detail": "서버 요청 한도에 도달했습니다. 잠시 후 다시 시도해 주세요."},
     )
+
+
+# 헬스체크: Render 헬스체크 및 /docs 진입 전 확인용
+@app.get("/", summary="헬스체크", tags=["root"])
+def root():
+    return {"service": "아파트 시세 AI 비서 API", "docs": "/docs", "status": "ok"}
 
 
 # 라우터 등록

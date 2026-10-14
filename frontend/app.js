@@ -135,7 +135,7 @@ async function loadConversations() {
     renderConversations(list);
   } catch (e) {
     document.getElementById('conv-list').innerHTML =
-      `<div class="conv-empty">목록 불러오기 실패</div>`;
+      `<div class="conv-empty">목록 불러오기 실패: ${esc(e.message)}</div>`;
   }
 }
 

@@ -9,7 +9,9 @@ from fastapi import APIRouter
 from schemas import ChatRequest, ChatResponse
 from services import chat_service
 
-router = APIRouter(prefix="/api/chat", tags=["chat"])
+_503 = {503: {"description": "Firestore 요청 한도 초과"}}
+
+router = APIRouter(prefix="/api/chat", tags=["chat"], responses=_503)
 
 
 @router.post("", response_model=ChatResponse, summary="AI 채팅")
