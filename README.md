@@ -2,6 +2,7 @@
 
 한국부동산원 **주간 아파트 매매가격지수** 데이터(5개 지역, 2012-11-26 ~ 2026-09-28, 지역별 720주, 총 3,600건)를 기반으로 사용자 질문에 데이터 근거로 답하는 AI 웹서비스.
 백엔드가 요약 통계를 계산해 GPT 시스템 프롬프트에 주입하고, GPT가 이를 근거로 자연어 답변을 생성합니다.
+기획부터 배포까지 Claude Code와 함께 단계별로 개발했습니다.
 
 ## 배포 URL
 
@@ -121,7 +122,7 @@ cp config.example.js config.js   # 기본값 localhost:8000
 | 변수명 | 용도 | 필수 |
 |--------|------|------|
 | `OPENAI_API_KEY` | OpenAI API 인증 키 | ✅ |
-| `OPENAI_MODEL` | 사용할 GPT 모델 ID | ✅ |
+| `OPENAI_MODEL` | 사용할 GPT 모델 ID (기본값 gpt-4o-mini) | — |
 | `FIREBASE_SERVICE_ACCOUNT_JSON` | Firebase 서비스 계정 키 (JSON 문자열) | ✅ |
 | `FIREBASE_KEY_PATH` | 키 파일 경로 (로컬 개발 선택 사용) | — |
 | `ALLOWED_ORIGINS` | CORS 허용 출처, 쉼표 구분 | ✅ |
@@ -220,6 +221,7 @@ ai-assistant/
 │   ├── config.example.js
 │   └── build.sh             # Vercel 빌드: API_BASE_URL → config.js
 └── docs/
+    ├── TECH-GUIDE.md        # 초보자용 기술 안내서
     └── screenshots/
         ├── 01-chat.png
         ├── 02-crud.png
