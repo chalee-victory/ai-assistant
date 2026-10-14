@@ -26,6 +26,7 @@
 ## 3. 기술 스택 (변경 금지)
 - 백엔드: FastAPI, Python 3.10+, venv. 패키지: fastapi, uvicorn, firebase-admin, openai, python-dotenv, pydantic → **Render 배포**
 - 프론트: **바닐라 HTML/CSS/JS만** (React·Vue 등 프레임워크 금지) → **Vercel 배포**
+  - 예외: 그래프는 **Chart.js 4.4.4** (CDN `cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.js`, 실패 시 unpkg). 이 버전엔 `chart.umd.min.js`가 없으니 경로 변경 금지
 - DB: Firebase Firestore
 - AI: OpenAI GPT API (기본 모델은 환경변수 `OPENAI_MODEL`, 저비용 모델 사용)
 
@@ -42,15 +43,22 @@ ai-assistant/
 │   ├── schemas.py           # Pydantic 모델
 │   ├── routers/             # HTTP 입구 (data.py, conversations.py, chat.py)
 │   ├── services/            # 업무 로직 (data_service.py, summary_service.py,
-│   │                        #            conversation_service.py, chat_service.py)
-│   ├── scripts/seed_data.py # CSV → Firestore 업로드
+│   │                        #            conversation_service.py, chat_service.py,
+│   │                        #            row_cache.py — 지역별 data 행 메모리 캐시)
+│   ├── scripts/             # 운영: seed_data(CSV→Firestore) · build_summary · show_prompt · backfill_updated_at
+│   │                        # 테스트: test_row_cache · test_series(키 불필요) · test_chat_rules(OpenAI 키 필요)
 │   ├── data/apt_price_index_weekly.csv
 │   ├── requirements.txt
+│   ├── .python-version      # 3.12.9 (Render와 동일)
 │   └── .env.example
-└── frontend/
-    ├── index.html, style.css, app.js
-    ├── config.js            # 빌드 시 생성 (커밋 금지)
-    └── build.sh             # Vercel 빌드: API_BASE_URL → config.js
+├── frontend/
+│   ├── index.html, style.css, app.js   # 채팅 · 대화 기록 · 요약 · 추이 그래프 · 데이터 관리
+│   ├── config.example.js    # 로컬용 → config.js로 복사
+│   ├── config.js            # 빌드 시 생성 (커밋 금지)
+│   └── build.sh             # Vercel 빌드: API_BASE_URL → config.js
+└── docs/
+    ├── TECH-GUIDE.md        # 초보자용 기술 안내서
+    └── screenshots/         # 01-chat · 02-crud · 03-history · 04-trend (README용)
 ```
 - 라우터는 요청/검증/응답만, 서비스는 DB·계산·GPT 호출만 담당한다.
 
@@ -62,6 +70,13 @@ ai-assistant/
 - `meta/summary` 문서: **요약 캐시**
   - 채팅 때는 이 문서 1건만 읽는다 (data 3,600건을 매번 읽지 않음 — 무료 한도 하루 읽기 5만 건 보호)
   - data를 생성·수정·삭제할 때, 그리고 seed 후에 요약을 다시 계산해 갱신한다
+- **메모리 캐시** (Firestore 읽기 95% 이상 절감 — 2026-10-10 무료 한도 초과 사고 후 도입)
+  - `row_cache`: 지역별 data 행을 처음 필요할 때만 로드(지연 로딩), 전부 받은 뒤에만 캐시에 대입(부분 로딩 방지)
+  - CRUD는 Firestore 쓰기 성공 후 캐시도 갱신, 요약 재계산은 캐시로(0읽기)
+  - 목록(GET /api/data)·그래프(GET /api/data/series)·요약 재계산이 같은 캐시를 공유
+  - summary도 메모리 캐시(CRUD 시 무효화), 대화 목록은 `order_by(updated_at).limit(30)`
+  - 새 기능도 data를 읽을 땐 반드시 `row_cache.get_region()`을 쓴다 (컬렉션 직접 stream 금지)
+  - `ResourceExhausted` → 503 한국어 안내
 
 ## 6. 요약(summary) 내용 — 지역별
 - period(시작~끝), count
@@ -75,6 +90,8 @@ ai-assistant/
 - 데이터: `POST /api/data`, `GET /api/data`(region·기간 필터, 페이지네이션), `PUT /api/data/{id}`, `DELETE /api/data/{id}`, `GET /api/data/summary`
 - 대화: `POST /api/conversations`, `GET /api/conversations`, `GET /api/conversations/{id}`, `DELETE /api/conversations/{id}`
 - 채팅: `POST /api/chat` — 요약 캐시 읽기 → 시스템 프롬프트 조립 → GPT 호출 → conversations에 자동 저장 → 답변 반환
+- 추가: `GET /` (헬스체크), `GET /api/data/series?region=` (추이 그래프용, 날짜 오름차순 — 보너스)
+- 주의: `/summary`, `/series` 같은 고정 경로는 `/{doc_id}` 경로보다 **먼저** 등록
 - Swagger: `/docs` 동작 확인
 
 ## 8. 보안·운영 규칙
@@ -98,30 +115,36 @@ ai-assistant/
   5. chat_service.py → routers/chat.py
   6. 프론트: index.html → style.css → app.js
   7. 배포: Render → Vercel(build.sh) → README.md
-- 보너스(필수 완료 후): Function Calling(지역·기간별 조회 도구), 그래프, CSV 내보내기, 다크모드
+- 보너스(필수 완료 후): Function Calling(지역·기간별 조회 도구), ~~그래프~~(완료), CSV 내보내기, 다크모드
 
-## 진행 현황 (2026-10-10 기준)
+### 협업 규칙 (로컬 Claude Code ↔ claude.ai 클라우드 Claude)
+- 두 곳 모두 이 저장소에 push한다. **작업 시작 전 `git pull`, 끝나면 push까지** — 동시에 고치면 충돌
+- `main`에 push하면 Render·Vercel이 **자동 재배포**된다. 평가 기간 등 조심할 땐 브랜치 + PR
+- 데이터 테스트에 원본 날짜를 쓰지 않는다 (2026-09-28 대전 원본 삭제 사고). 테스트용은 원본에 없는 미래 **월요일**
+- 키·`.env` 화면은 캡처·공유 금지
 
-### 완료: 1~5단계
-- **1단계**: .gitignore, requirements.txt, .env.example, config.py
-- **2단계**: firebase.py, scripts/seed_data.py — Firestore data 컬렉션 3,600건 적재 완료
-- **3단계**: schemas.py, data_service.py, summary_service.py, routers/data.py, main.py
-  - 보완: trend(4주 기준)/streak(직전 주 기준) 분리
-  - 보완: 4주·52주 변화율을 행 인덱스 → 날짜 기준(28/364일)으로 수정 (연휴 공백 주 무관)
-  - 보완: CRUD 시 전체 3,600건 대신 해당 지역 ~720건만 재계산
-  - 보완: doc_id 앞뒤 공백 자동 제거 (PUT, DELETE)
-- **4단계**: conversation_service.py, routers/conversations.py — 대화 CRUD + add_message()
-- **5단계**: chat_service.py, routers/chat.py — GPT 채팅 API
-  - 의존성 고정: openai==1.57.0 + httpx==0.27.2 (proxies 호환 오류 해결)
-  - 시스템 프롬프트: 지역 순서 고정(전국→강북→강남→대전→세종), 갱신 시각 KST 표시
-  - 시스템 프롬프트: 답변 예시는 형식 틀만 사용(실제 숫자 금지), 답불가 질문은 이유+대안 제시
-  - scripts/show_prompt.py — OpenAI 호출 없이 프롬프트 전문 확인 가능
-  - 채팅 테스트 ①~⑤ 및 재테스트 모두 통과
+## 진행 현황 (2026-10-14 기준) — 미션 제출 완료
 
-### 다음: 6단계 — 프론트엔드 (바닐라 HTML/CSS/JS)
-- frontend/index.html → style.css → app.js
-- Render 백엔드 URL을 API_BASE_URL 환경변수로 연결
+### 완료: 1~7단계 + 보너스 그래프
+- **1~5단계**: 토대 → Firestore 3,600건 → 데이터 CRUD·요약 → 대화 → 채팅(gpt-4o-mini)
+- **6단계**: 프론트(3단 레이아웃, Pretendard, 상승 빨강/하락 파랑), AI 답변 품질 보강, 데이터 안전장치
+  - 순위는 `_compute_rankings()`가 코드로 계산해 주입, 이번 요청의 숫자만 사용, 매수 질문 금지어 시 1회 재생성
+  - 입력 검증 프론트+백엔드(월요일 날짜 포함), 중복 409, 삭제 확인창, 204 응답 처리
+- **7단계**: 요구사항 점검(❌ 0개) → Firestore 읽기 최적화 → Render·Vercel 배포 → 키 재발급 → README·TECH-GUIDE·스크린샷
+- **보너스 그래프** (커밋 3846c12): `/api/data/series` + '추이 그래프' 탭(지역 복수 선택, 1년/3년/5년/전체, 기준 100, 크게 보기, CRUD 자동 갱신)
 
-### 남은 작은 보완 (6단계 이후 또는 중 처리)
-- '전체 변화'는 기간(2012-11-26 이후)을 함께 표기
-- 시스템 프롬프트에서 '추세(4주)'와 전체 변화율을 섞어 쓰지 않도록 GPT 지침 보강
+### 배포 주소
+- 프론트 https://ai-assistant-frontend-xi.vercel.app (`-xi` 없는 주소는 남의 사이트)
+- API https://ai-assistant-fenj.onrender.com · Swagger `/docs`
+- Render: Root `backend`, Start `uvicorn main:app --host 0.0.0.0 --port $PORT`, 무료 티어 콜드스타트 최대 1분
+- Vercel: Root `frontend`, Build `bash build.sh`, Output `.`
+- Firestore 무료 한도(하루 읽기 5만) 초기화: 매일 16시(KST)
+
+### 테스트 (backend/, venv 활성화)
+- `python scripts/test_row_cache.py` — 9/9
+- `python scripts/test_series.py` — 7/7 (키 불필요, 원본 CSV 사용)
+- `python -m scripts.test_chat_rules` — 실제 OpenAI 호출(키 필요)
+
+### 남은 일
+- 보너스: CSV 내보내기, 다크모드, Function Calling
+- 향후 과제(README 기재): 관리자 인증(현재 누구나 CRUD 가능), 커서 기반 페이지네이션
