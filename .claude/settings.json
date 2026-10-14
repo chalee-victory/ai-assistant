@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git",
+            "args": ["-C", "${CLAUDE_PROJECT_DIR}", "pull", "--ff-only"],
+            "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "git",
+            "args": ["-C", "${CLAUDE_PROJECT_DIR}", "pull", "--ff-only"],
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

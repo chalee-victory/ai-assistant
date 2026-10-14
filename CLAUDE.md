@@ -56,6 +56,7 @@ ai-assistant/
 │   ├── config.example.js    # 로컬용 → config.js로 복사
 │   ├── config.js            # 빌드 시 생성 (커밋 금지)
 │   └── build.sh             # Vercel 빌드: API_BASE_URL → config.js
+├── .claude/settings.json    # Claude Code 공용 설정: 세션 시작 시 자동 git pull 훅 (개인 설정은 .gitignore)
 └── docs/
     ├── TECH-GUIDE.md        # 초보자용 기술 안내서
     └── screenshots/         # 01-chat · 02-crud · 03-history · 04-trend (README용)
@@ -117,8 +118,26 @@ ai-assistant/
   7. 배포: Render → Vercel(build.sh) → README.md
 - 보너스(필수 완료 후): Function Calling(지역·기간별 조회 도구), ~~그래프~~(완료), CSV 내보내기, 다크모드
 
-### 협업 규칙 (로컬 Claude Code ↔ claude.ai 클라우드 Claude)
-- 두 곳 모두 이 저장소에 push한다. **작업 시작 전 `git pull`, 끝나면 push까지** — 동시에 고치면 충돌
+### 협업 규칙 (Claude Code(PC 터미널) ↔ Claude 앱(클라우드 작업))
+- 두 곳 모두 이 저장소에 push한다. **GitHub가 기준(정답)**이고, 두 작업 공간은 push·pull로만 맞춰진다 (자동 동기화 아님)
+- 동시에 같은 파일을 고치면 충돌 — 한쪽이 push한 뒤 다른 쪽이 pull하고 시작한다
+
+#### 세션 시작 규칙
+- PC의 Claude Code는 `.claude/settings.json`의 **SessionStart 훅**이 시작·재개 때 `git pull --ff-only`를 자동 실행한다
+  - 저장 안 한 수정이 있거나 양쪽 커밋이 갈라지면 pull은 **아무것도 덮어쓰지 않고 멈춘다** (화면에 훅 오류 알림)
+- 작업 전 `git status -sb`로 확인: `[behind N]`이거나 갈라졌으면 **사용자에게 먼저 알린다**
+  - `git stash`, `git reset --hard`, 강제 push(`--force`)는 **사용자 동의 없이 절대 실행하지 않는다**
+- 클라우드 Claude는 작업 전 항상 GitHub 최신을 받아서 시작한다
+
+#### 작업 마무리 규칙 (두 Claude 공통 — 맥락 동기화)
+의미 있는 작업(기능·수정·설정 변경)을 끝내면 push 전에 아래를 **모두** 한다.
+1. 테스트 실행 — 키 없이 되는 테스트(`test_row_cache`, `test_series`)는 항상, 키가 필요한 것은 PC에서
+2. **이 파일(CLAUDE.md)의 "진행 현황" 갱신** — 무엇을 했고, 무엇이 남았고, 주의할 점은 무엇인지. 날짜(기준일)도 함께 고친다
+3. 커밋 메시지에 **무엇을·왜** 바꿨는지 한국어로 적는다 (상대 Claude가 `git log`로 읽는다)
+4. push → 사용자에게 결과와 "다른 쪽에서 받을 것"을 한 줄로 알린다
+- 오타 수정 같은 사소한 변경은 2번 생략 가능
+
+#### 기타 규칙
 - `main`에 push하면 Render·Vercel이 **자동 재배포**된다. 평가 기간 등 조심할 땐 브랜치 + PR
 - 데이터 테스트에 원본 날짜를 쓰지 않는다 (2026-09-28 대전 원본 삭제 사고). 테스트용은 원본에 없는 미래 **월요일**
 - 키·`.env` 화면은 캡처·공유 금지
@@ -132,6 +151,7 @@ ai-assistant/
   - 입력 검증 프론트+백엔드(월요일 날짜 포함), 중복 409, 삭제 확인창, 204 응답 처리
 - **7단계**: 요구사항 점검(❌ 0개) → Firestore 읽기 최적화 → Render·Vercel 배포 → 키 재발급 → README·TECH-GUIDE·스크린샷
 - **보너스 그래프** (커밋 3846c12): `/api/data/series` + '추이 그래프' 탭(지역 복수 선택, 1년/3년/5년/전체, 기준 100, 크게 보기, CRUD 자동 갱신)
+- **동기화 체계**: Claude Code 시작 시 자동 pull 훅 + 작업 마무리 규칙(CLAUDE.md 갱신 후 push)
 
 ### 배포 주소
 - 프론트 https://ai-assistant-frontend-xi.vercel.app (`-xi` 없는 주소는 남의 사이트)
