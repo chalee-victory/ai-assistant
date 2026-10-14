@@ -7,7 +7,14 @@ routers/data.py — /api/data 엔드포인트
 
 from fastapi import APIRouter, Query
 
-from schemas import DataCreate, DataListResponse, DataResponse, DataUpdate
+from schemas import (
+    DataCreate,
+    DataListResponse,
+    DataResponse,
+    DataUpdate,
+    RegionType,
+    SeriesResponse,
+)
 from services import data_service, summary_service
 
 _503 = {503: {"description": "Firestore 요청 한도 초과"}}
@@ -20,6 +27,18 @@ router = APIRouter(prefix="/api/data", tags=["data"], responses=_503)
 def get_summary() -> dict:
     """meta/summary 캐시에서 지역별 요약 통계를 반환한다."""
     return summary_service.get_summary()
+
+
+# ── 추이 그래프용 시계열 (/{id} 보다 앞에 등록) ─────────────────
+@router.get("/series", response_model=SeriesResponse, summary="지역별 지수 추이 (그래프용)")
+def get_series(
+    region: RegionType = Query(..., description="지역 (전국/서울-강북/서울-강남/대전/세종)"),
+    start_date: str | None = Query(None, description="시작일 YYYY-MM-DD (생략 시 처음부터)"),
+    end_date: str | None = Query(None, description="종료일 YYYY-MM-DD (생략 시 끝까지)"),
+) -> SeriesResponse:
+    """한 지역의 (날짜, 지수) 목록을 날짜 오름차순으로 반환한다.
+    프론트 '추이 그래프' 탭이 지역마다 한 번씩 호출한다."""
+    return data_service.get_series(region, start_date, end_date)
 
 
 # ── 목록 조회 ─────────────────────────────────────────────

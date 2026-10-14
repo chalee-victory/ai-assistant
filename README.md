@@ -30,6 +30,10 @@
 ![대화 이력](docs/screenshots/03-history.png)
 사이드바에서 이전 대화를 선택해 이어갈 수 있습니다.
 
+### 지역별 지수 추이 그래프
+![추이 그래프](docs/screenshots/04-trend.png)
+'추이 그래프' 탭에서 지역(복수 선택)과 기간(1년·3년·5년·전체)을 고르면 주간 지수 추이를 겹쳐 볼 수 있습니다. 마우스를 올리면 같은 주의 지역별 지수가 높은 순으로 표시되고, 아래 범례에는 지역별 최신값과 선택 기간 변화율이 함께 나옵니다. '크게 보기'로 넓은 화면에서도 볼 수 있으며, 데이터를 추가·수정·삭제하면 그래프에도 바로 반영됩니다.
+
 ---
 
 ## 기술 스택
@@ -39,7 +43,7 @@
 | 분류 | 사용 기술 |
 |------|-----------|
 | 백엔드 | FastAPI · Python 3.12.9 · Uvicorn |
-| 프론트엔드 | 바닐라 HTML / CSS / JavaScript |
+| 프론트엔드 | 바닐라 HTML / CSS / JavaScript · Chart.js 4.4.4 (추이 그래프) |
 | 데이터베이스 | Firebase Firestore (asia-northeast3) |
 | AI | OpenAI gpt-4o-mini |
 | 백엔드 배포 | Render (무료 티어) |
@@ -67,6 +71,7 @@
 ### Firestore 읽기 최적화
 - **지역별 메모리 캐시 (`row_cache`)**: 지역 첫 접근 시 Firestore를 읽고 이후는 메모리에서 반환합니다(지연 로딩). 스트리밍 도중 예외 시 캐시에 미대입(부분 로딩 방지).
 - **기본 필터 `전국`**: 데이터 탭 최초 로드 시 전체 3,600건 조회 대신 720건만 접근합니다.
+- **추이 그래프도 같은 캐시 사용**: 그래프 API는 데이터 관리 탭과 메모리 캐시를 공유하고, 기본은 `전국` 1개 지역만 불러옵니다. 기간 전환(1년·3년·5년·전체)은 브라우저에서 처리해 재요청이 없습니다.
 - **대화 목록 상한**: Firestore 쿼리 단에서 `order_by + limit(30)`으로 고정합니다.
 - **결과**: 평가자 1인 시나리오 기준 약 31,000건 → 약 1,600건(서버 기동 직후) / 약 200건(캐시 적중), **95% 이상 절감**.
 
@@ -80,6 +85,8 @@
 ### 자동 테스트
 - `scripts/test_row_cache.py`: row_cache 동작 9가지 단위 테스트 (9/9 PASS)
 - `scripts/test_chat_rules.py`: GPT 채팅 규칙 검증 (매수 질문·금지어·지수 해석 등)
+- `scripts/test_series.py`: 추이 그래프 API 7가지 테스트 — 키 없이 실행, 원본 CSV로 검증 (7/7 PASS)
+  - 5개 지역 × 720건·날짜 정렬, 기준시점 100, 기간 필터, 잘못된 지역 422, CRUD 즉시 반영, 캐시 적중 시 Firestore 읽기 0건
 
 ---
 
@@ -176,6 +183,7 @@ python scripts/build_summary.py  # meta/summary 요약 계산·저장
 | `POST` | `/api/data` | 데이터 추가 |
 | `GET` | `/api/data` | 데이터 목록 조회 (지역·기간 필터, 페이지네이션) |
 | `GET` | `/api/data/summary` | 요약 통계 조회 |
+| `GET` | `/api/data/series` | 지역별 지수 추이 (그래프용, 날짜 오름차순) |
 | `PUT` | `/api/data/{id}` | 데이터 수정 |
 | `DELETE` | `/api/data/{id}` | 데이터 삭제 |
 | `POST` | `/api/conversations` | 대화 생성 |
@@ -190,7 +198,6 @@ python scripts/build_summary.py  # meta/summary 요약 계산·저장
 
 - 관리자 인증 (현재는 누구나 데이터 CRUD 가능)
 - 커서 기반 페이지네이션 (대용량 대비)
-- 지역별 지수 추이 그래프
 - CSV 내보내기
 - 다크모드
 
@@ -209,7 +216,7 @@ ai-assistant/
 │   ├── schemas.py           # Pydantic 스키마
 │   ├── routers/             # data.py · conversations.py · chat.py
 │   ├── services/            # data_service · summary_service · conversation_service · chat_service · row_cache
-│   ├── scripts/             # seed_data · build_summary · show_prompt · test_row_cache · test_chat_rules · backfill_updated_at
+│   ├── scripts/             # seed_data · build_summary · show_prompt · test_row_cache · test_chat_rules · test_series · backfill_updated_at
 │   ├── data/apt_price_index_weekly.csv
 │   ├── requirements.txt
 │   ├── .python-version      # 3.12.9
@@ -217,7 +224,7 @@ ai-assistant/
 ├── frontend/
 │   ├── index.html
 │   ├── style.css
-│   ├── app.js
+│   ├── app.js               # 채팅 · 대화 기록 · 요약 · 추이 그래프(Chart.js) · 데이터 관리
 │   ├── config.example.js
 │   └── build.sh             # Vercel 빌드: API_BASE_URL → config.js
 └── docs/
@@ -225,5 +232,6 @@ ai-assistant/
     └── screenshots/
         ├── 01-chat.png
         ├── 02-crud.png
-        └── 03-history.png
+        ├── 03-history.png
+        └── 04-trend.png
 ```

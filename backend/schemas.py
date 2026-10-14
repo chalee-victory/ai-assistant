@@ -76,6 +76,18 @@ class DataListResponse(BaseModel):
     items: list[DataResponse]
 
 
+# ── 추이 그래프용 시계열 응답 ──────────────────────────────────
+class SeriesPoint(BaseModel):
+    date: str
+    value: float
+
+
+class SeriesResponse(BaseModel):
+    region: str
+    count: int
+    points: list[SeriesPoint]   # 날짜 오름차순
+
+
 # ════════════════════════════════════════════════════════════
 # 대화(Conversation) 모델
 # ════════════════════════════════════════════════════════════

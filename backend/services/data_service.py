@@ -13,7 +13,14 @@ from datetime import datetime, timezone
 from fastapi import HTTPException
 
 from firebase import db
-from schemas import DataCreate, DataListResponse, DataResponse, DataUpdate
+from schemas import (
+    DataCreate,
+    DataListResponse,
+    DataResponse,
+    DataUpdate,
+    SeriesPoint,
+    SeriesResponse,
+)
 from services import row_cache
 from services.summary_service import compute_and_save_region
 
@@ -105,6 +112,26 @@ def get_data_list(
         page_size=page_size,
         items=items[start : start + page_size],
     )
+
+
+# ── 추이 그래프용 시계열 ────────────────────────────────────
+def get_series(
+    region: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+) -> SeriesResponse:
+    """지역 하나의 (날짜, 지수) 목록을 날짜 오름차순으로 반환한다.
+
+    row_cache를 그대로 사용하므로 데이터 관리 탭과 캐시를 공유한다.
+    (해당 지역 최초 접근 시에만 Firestore 읽기, 이후 0읽기 · CRUD 즉시 반영)
+    """
+    points = [
+        SeriesPoint(date=row["date"], value=row["value"])
+        for row in row_cache.get_region(region)   # 이미 날짜 오름차순
+        if (not start_date or row["date"] >= start_date)
+        and (not end_date or row["date"] <= end_date)
+    ]
+    return SeriesResponse(region=region, count=len(points), points=points)
 
 
 # ── 수정 ──────────────────────────────────────────────────

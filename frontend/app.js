@@ -118,6 +118,8 @@ function initTabs() {
       document.getElementById('tab-' + tabId).classList.remove('hidden');
 
       // 데이터 관리 탭 최초 진입 시 자동 조회
+      if (tabId === 'trend') onTrendTabShown();
+
       if (tabId === 'data-mgmt' && !state.dataFirstLoad) {
         state.dataFirstLoad = true;
         loadData();
@@ -479,6 +481,7 @@ function initDataMgmt() {
       setTimeout(() => { msg.textContent = ''; }, 3000);
       loadData();
       loadSummary();
+      invalidateTrend();
     } catch (err) {
       msg.textContent = `오류: ${err.message}`;
       msg.className = 'form-msg';
@@ -513,6 +516,7 @@ function initDataMgmt() {
       closeEditModal();
       loadData();
       loadSummary();
+      invalidateTrend();
     } catch (err) {
       msg.textContent = `오류: ${err.message}`;
       // 오류 시 모달 유지 (입력값 보존)
@@ -583,6 +587,7 @@ function renderDataTable(items) {
         await api.del(`/api/data/${btn.dataset.id}`);
         loadData();
         loadSummary();
+        invalidateTrend();
       } catch (e) {
         alert(`삭제 실패: ${e.message}`);
       }
@@ -645,6 +650,417 @@ function closeEditModal() {
 }
 
 // ─────────────────────────────────────────────────────────
+// 추이 그래프 (지역별 지수 추이)
+//   - 지역마다 GET /api/data/series 를 한 번만 호출하고 결과를 기억한다
+//     (서버도 메모리 캐시를 쓰므로 데이터 관리 탭과 Firestore 읽기를 공유)
+//   - 기간(1년/3년/5년/전체)은 받은 데이터를 브라우저에서 잘라 쓴다 → 재요청 없음
+//   - 데이터 추가·수정·삭제 시 invalidateTrend()로 기억을 비우고 다시 그린다
+// ─────────────────────────────────────────────────────────
+const TREND_REGIONS = ['전국', '서울-강북', '서울-강남', '대전', '세종'];
+
+// 지역별 색상·선 모양 (색약 검증 후 선택, 세종은 점선으로 강남과 추가 구분)
+const TREND_STYLE = {
+  '전국':      { color: '#374151', width: 2.5, dash: [] },
+  '서울-강북': { color: '#2a78d6', width: 2,   dash: [] },
+  '서울-강남': { color: '#eb6834', width: 2,   dash: [] },
+  '대전':      { color: '#1baf7a', width: 2,   dash: [] },
+  '세종':      { color: '#eda100', width: 2,   dash: [6, 3] },
+};
+
+const PERIOD_YEARS = { '1y': 1, '3y': 3, '5y': 5, 'all': null };
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const trend = {
+  selected:  new Set(['전국']),   // 기본: 전국만 (Firestore 읽기 최소화)
+  period:    '3y',
+  series:    {},                  // {지역: [{date, value}]} — 받아 온 원본
+  loading:   new Set(),           // 요청 중인 지역
+  errors:    {},                  // {지역: 오류 메시지}
+  chart:     null,
+  started:   false,               // 탭 최초 진입 여부
+  coldTimer: null,
+};
+
+/** 'YYYY-MM-DD' → 로컬 자정 타임스탬프(ms) */
+function dateToMs(d) {
+  const [y, m, day] = d.split('-').map(Number);
+  return new Date(y, m - 1, day).getTime();
+}
+
+/** 타임스탬프 → 'YYYY-MM-DD' */
+function msToDate(ms) {
+  const dt = new Date(ms);
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getDate()).padStart(2, '0');
+  return `${dt.getFullYear()}-${mm}-${dd}`;
+}
+
+/** x축 눈금: 1·2·3·6개월 또는 1·2·3·5년 간격 중 개수가 limit 이하인 가장 촘촘한 간격 */
+function calendarTicks(minMs, maxMs, limit) {
+  const stepsMonths = [1, 2, 3, 6, 12, 24, 36, 60];
+  const start = new Date(minMs);
+  for (const step of stepsMonths) {
+    const ticks = [];
+    // 첫 눈금: min 이후 첫 '간격의 배수' 달 1일 (연 단위면 1월 1일)
+    let y = start.getFullYear(), m = start.getMonth();
+    let t = new Date(y, m, 1).getTime();
+    if (t < minMs) { m += 1; }
+    while (true) {
+      const total = y * 12 + m;
+      if (total % step === 0) break;
+      m += 1;
+    }
+    for (let k = 0; ; k++) {
+      const total = y * 12 + m + k * step;
+      const ms = new Date(Math.floor(total / 12), total % 12, 1).getTime();
+      if (ms > maxMs) break;
+      ticks.push({ value: ms });
+    }
+    if (ticks.length <= limit) return ticks;
+  }
+  return [];
+}
+
+/** 선택한 기간에 맞게 자른 점 목록 (가장 최근 날짜 기준으로 N년) */
+function pointsInPeriod(points, latestMs) {
+  const years = PERIOD_YEARS[trend.period];
+  if (!years) return points;
+  const from = latestMs - years * 365.25 * DAY_MS;
+  return points.filter(p => p.x >= from);
+}
+
+function initTrend() {
+  // 지역 칩 생성
+  const wrap = document.getElementById('trend-regions');
+  wrap.innerHTML = TREND_REGIONS.map(r => {
+    const st = TREND_STYLE[r];
+    const on = trend.selected.has(r);
+    return `<button type="button" class="region-chip${on ? ' active' : ''}"
+              data-region="${esc(r)}" aria-pressed="${on}">
+              <span class="chip-swatch" style="--c:${st.color}"
+                ${st.dash.length ? 'data-dashed="1"' : ''}></span>${esc(r)}
+            </button>`;
+  }).join('');
+
+  wrap.addEventListener('click', e => {
+    const btn = e.target.closest('.region-chip');
+    if (!btn) return;
+    const r = btn.dataset.region;
+    if (trend.selected.has(r)) {
+      if (trend.selected.size === 1) return;    // 최소 1개는 남긴다
+      trend.selected.delete(r);
+    } else {
+      trend.selected.add(r);
+    }
+    btn.classList.toggle('active', trend.selected.has(r));
+    btn.setAttribute('aria-pressed', trend.selected.has(r));
+    loadTrend();
+  });
+
+  // 기간 버튼
+  document.getElementById('trend-periods').addEventListener('click', e => {
+    const btn = e.target.closest('.period-btn');
+    if (!btn) return;
+    trend.period = btn.dataset.period;
+    document.querySelectorAll('.period-btn').forEach(b =>
+      b.classList.toggle('active', b === btn));
+    renderTrend();
+  });
+
+  // 크게 보기 / 닫기 — 같은 그래프를 모달로 옮겼다가 되돌린다
+  const box   = document.getElementById('trend-chart-box');
+  const modal = document.getElementById('trend-modal');
+  const open  = () => {
+    document.getElementById('trend-chart-modal').appendChild(box);
+    modal.classList.remove('hidden');
+    renderTrend();   // 큰 화면에서는 선 끝에 지역 이름 표시
+  };
+  const close = () => {
+    document.getElementById('trend-chart-home').appendChild(box);
+    modal.classList.add('hidden');
+    renderTrend();
+  };
+  document.getElementById('btn-trend-expand').addEventListener('click', open);
+  document.getElementById('btn-trend-close').addEventListener('click', close);
+  modal.addEventListener('click', e => { if (e.target === modal) close(); });
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape' && !modal.classList.contains('hidden')) close();
+  });
+}
+
+/** 탭 진입 시 호출 */
+function onTrendTabShown() {
+  if (!trend.started) {
+    trend.started = true;
+    loadTrend();
+  } else {
+    renderTrend();
+  }
+}
+
+/** 데이터 추가·수정·삭제 후 호출: 받아 둔 시계열을 버리고 (보고 있으면) 다시 받기 */
+function invalidateTrend() {
+  trend.series = {};
+  trend.errors = {};
+  const visible = !document.getElementById('tab-trend').classList.contains('hidden');
+  if (trend.started && visible) loadTrend();
+  else trend.started = false;   // 다음 탭 진입 때 새로 받음
+}
+
+/** 선택된 지역 중 아직 없는 것만 서버에서 받아 온다 */
+async function loadTrend() {
+  const need = [...trend.selected].filter(r => !trend.series[r] && !trend.loading.has(r));
+  renderTrend();
+  if (!need.length) return;
+
+  need.forEach(r => { trend.loading.add(r); delete trend.errors[r]; });
+  clearTimeout(trend.coldTimer);
+  trend.coldTimer = setTimeout(() => {
+    if (trend.loading.size) setTrendStatus('⏳ 서버를 깨우는 중입니다. 처음 요청은 최대 1분 소요될 수 있습니다.');
+  }, 10000);
+  setTrendStatus('그래프를 불러오는 중...');
+
+  await Promise.all(need.map(async r => {
+    try {
+      const res = await api.get(`/api/data/series?region=${encodeURIComponent(r)}`);
+      trend.series[r] = res.points.map(p => ({ x: dateToMs(p.date), y: p.value }));
+    } catch (e) {
+      trend.errors[r] = e.message;
+    } finally {
+      trend.loading.delete(r);
+    }
+  }));
+
+  clearTimeout(trend.coldTimer);
+  renderTrend();
+}
+
+function setTrendStatus(text) {
+  const el = document.getElementById('trend-status');
+  el.textContent = text;
+  el.classList.toggle('hidden', !text);
+}
+
+/** 큰 화면에서만: 선 끝에 지역 이름 직접 표시 (겹치면 위아래로 벌림) */
+const endLabelPlugin = {
+  id: 'endLabels',
+  afterDatasetsDraw(chart, _args, opts) {
+    if (!opts.enabled) return;
+    const { ctx, chartArea } = chart;
+    const items = [];
+    chart.data.datasets.forEach((ds, i) => {
+      const meta = chart.getDatasetMeta(i);
+      const last = meta.data[meta.data.length - 1];
+      if (!last || meta.hidden) return;
+      items.push({ y: last.y, label: ds.label, color: ds.borderColor });
+    });
+    items.sort((a, b) => a.y - b.y);
+    const GAP = 15;
+    for (let i = 1; i < items.length; i++) {
+      if (items[i].y - items[i - 1].y < GAP) items[i].y = items[i - 1].y + GAP;
+    }
+    ctx.save();
+    ctx.font = '600 12px Pretendard, sans-serif';
+    ctx.textBaseline = 'middle';
+    items.forEach(it => {
+      ctx.beginPath();                          // 점은 지역 색, 글자는 본문색
+      ctx.arc(chartArea.right + 8, it.y, 3.5, 0, Math.PI * 2);
+      ctx.fillStyle = it.color;
+      ctx.fill();
+      ctx.fillStyle = '#374151';
+      ctx.fillText(it.label, chartArea.right + 15, it.y);
+    });
+    ctx.restore();
+  },
+};
+
+/** 기준선 100 (점선) */
+const baseLinePlugin = {
+  id: 'baseLine',
+  beforeDatasetsDraw(chart) {
+    const y = chart.scales.y;
+    if (!y || y.min > 100 || y.max < 100) return;
+    const { ctx, chartArea } = chart;
+    const py = y.getPixelForValue(100);
+    ctx.save();
+    ctx.strokeStyle = '#9ca3af';
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(chartArea.left, py);
+    ctx.lineTo(chartArea.right, py);
+    ctx.stroke();
+    ctx.restore();
+  },
+  // 글자는 선 위에 그려 가려지지 않게 (흰 바탕)
+  afterDatasetsDraw(chart) {
+    const y = chart.scales.y;
+    if (!y || y.min > 100 || y.max < 100) return;
+    const { ctx, chartArea } = chart;
+    const py = y.getPixelForValue(100);
+    const text = '기준 100';
+    ctx.save();
+    ctx.font = '11px Pretendard, sans-serif';
+    const w = ctx.measureText(text).width;
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(chartArea.left + 2, py - 15, w + 6, 13);
+    ctx.fillStyle = '#6b7280';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(text, chartArea.left + 5, py - 3);
+    ctx.restore();
+  },
+};
+
+function renderTrend() {
+  const regions = TREND_REGIONS.filter(r => trend.selected.has(r) && trend.series[r]);
+
+  // 상태 문구: 로딩 / 오류 / 정상
+  const errs = Object.entries(trend.errors).filter(([r]) => trend.selected.has(r));
+  if (trend.loading.size && !regions.length) {
+    // 첫 로딩 중 — setTrendStatus 가 이미 문구를 띄움
+  } else if (errs.length && !regions.length) {
+    setTrendStatus(`그래프를 불러오지 못했습니다: ${errs[0][1]}`);
+  } else {
+    setTrendStatus('');
+  }
+
+  if (typeof Chart === 'undefined') {
+    setTrendStatus('그래프 라이브러리를 불러오지 못했습니다. 새로고침(Ctrl+F5) 해 주세요.');
+    return;
+  }
+  if (!regions.length) {
+    if (trend.chart) { trend.chart.data.datasets = []; trend.chart.update('none'); }
+    renderTrendLegend([], errs);
+    return;
+  }
+
+  // 기간 기준: 선택 지역 중 가장 최근 날짜
+  const latestMs = Math.max(...regions.map(r => trend.series[r].at(-1)?.x ?? 0));
+  const datasets = regions.map(r => {
+    const st = TREND_STYLE[r];
+    return {
+      label: r,
+      data: pointsInPeriod(trend.series[r], latestMs),
+      borderColor: st.color,
+      backgroundColor: st.color,
+      borderWidth: st.width,
+      borderDash: st.dash,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointHoverBorderWidth: 2,
+      pointHoverBorderColor: '#fff',
+      tension: 0,
+    };
+  });
+
+  const box   = document.getElementById('trend-chart-box');
+  const large = box.parentElement.id === 'trend-chart-modal';
+  const spanYears = (latestMs - Math.min(...datasets.map(d => d.data[0]?.x ?? latestMs))) / (365.25 * DAY_MS);
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: false,
+    parsing: false,
+    normalized: true,
+    interaction: { mode: 'nearest', axis: 'x', intersect: false },
+    layout: { padding: { right: large ? 78 : 4 } },
+    scales: {
+      x: {
+        type: 'linear',
+        min: datasets.reduce((m, d) => Math.min(m, d.data[0]?.x ?? m), Infinity),
+        max: latestMs,
+        grid: { display: false },
+        border: { color: '#d1d5db' },
+        // 눈금을 달력 기준(매년 1월 1일 / 매월 1일)에 맞춘다
+        afterBuildTicks: scale => {
+          scale.ticks = calendarTicks(scale.min, scale.max, large ? 8 : 4);
+        },
+        ticks: {
+          autoSkip: false,
+          maxRotation: 0,
+          color: '#6b7280',
+          font: { size: 11 },
+          callback: v => {
+            const d = msToDate(v);
+            return spanYears > 2.5 ? d.slice(0, 4) : d.slice(2, 7).replace('-', '.');
+          },
+        },
+      },
+      y: {
+        grid: { color: '#eef0f3' },
+        border: { display: false },
+        ticks: { color: '#6b7280', font: { size: 11 }, maxTicksLimit: 6 },
+      },
+    },
+    plugins: {
+      legend: { display: false },          // 아래 범례 목록을 직접 그림
+      endLabels: { enabled: large },
+      tooltip: {
+        backgroundColor: 'rgba(30,34,53,0.94)',
+        padding: 10,
+        boxPadding: 4,
+        usePointStyle: true,
+        itemSort: (a, b) => b.parsed.y - a.parsed.y,   // 지수 높은 순
+        callbacks: {
+          title: items => items.length ? `${msToDate(items[0].parsed.x)} 주` : '',
+          label: item => ` ${item.dataset.label}  ${item.parsed.y.toFixed(2)}`,
+        },
+      },
+    },
+  };
+
+  if (trend.chart) {
+    trend.chart.data.datasets = datasets;
+    trend.chart.options = options;
+    trend.chart.update('none');
+  } else {
+    trend.chart = new Chart(document.getElementById('trend-canvas'), {
+      type: 'line',
+      data: { datasets },
+      options,
+      plugins: [baseLinePlugin, endLabelPlugin],
+    });
+  }
+
+  renderTrendLegend(datasets, errs);
+}
+
+/** 범례 겸 기간 요약: 지역 · 최신값 · 선택 기간 변화율 */
+function renderTrendLegend(datasets, errs) {
+  const el = document.getElementById('trend-legend');
+  const periodName = { '1y': '1년', '3y': '3년', '5y': '5년', 'all': '전체' }[trend.period];
+  const rows = datasets.map(d => {
+    const first = d.data[0], last = d.data.at(-1);
+    const pct = first && last ? (last.y / first.y - 1) * 100 : null;
+    const st = TREND_STYLE[d.label];
+    return `
+      <div class="legend-row">
+        <span class="legend-swatch" style="--c:${st.color}" ${st.dash.length ? 'data-dashed="1"' : ''}></span>
+        <span class="legend-name">${esc(d.label)}</span>
+        <span class="legend-latest">${last ? last.y.toFixed(2) : '-'}</span>
+        <span class="legend-pct ${numColorClass(pct)}">${fmtPct(pct)}</span>
+      </div>`;
+  }).join('');
+
+  const head = datasets.length ? `
+      <div class="legend-head">
+        <span>지역</span><span>최신</span><span>${periodName} 변화</span>
+      </div>` : '';
+  const firstDate = datasets.length ? msToDate(Math.min(...datasets.map(d => d.data[0]?.x ?? Infinity))) : '';
+  const lastDate  = datasets.length ? msToDate(Math.max(...datasets.map(d => d.data.at(-1)?.x ?? 0))) : '';
+  const range = datasets.length ? `<div class="legend-range">${firstDate} ~ ${lastDate}</div>` : '';
+  const loadingNames = [...trend.loading].filter(r => trend.selected.has(r));
+  const loading = loadingNames.length
+    ? `<div class="legend-msg">${esc(loadingNames.join(', '))} 불러오는 중...</div>` : '';
+  const errMsg = (errs || []).length
+    ? `<div class="legend-msg err">${esc(errs.map(([r, m]) => `${r}: ${m}`).join(' / '))}</div>` : '';
+
+  el.innerHTML = head + rows + range + loading + errMsg;
+}
+
+// ─────────────────────────────────────────────────────────
 // 초기화
 // ─────────────────────────────────────────────────────────
 async function init() {
@@ -652,6 +1068,7 @@ async function init() {
   initNewChat();
   initChat();
   initDataMgmt();
+  initTrend();
 
   // 대화 목록 + 요약 병렬 로드
   await Promise.all([
