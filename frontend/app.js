@@ -264,6 +264,8 @@ function initChat() {
       if (!state.currentConvId) {
         state.currentConvId = res.conversation_id;
       }
+      // 서버가 반환한 제목으로 헤더 즉시 갱신 (새 대화 첫 전송 시 자동 제목 반영)
+      document.getElementById('chat-title').textContent = res.title;
       loadConversations();
     } catch (e) {
       stopColdStartTimer();

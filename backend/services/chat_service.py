@@ -328,5 +328,7 @@ def chat(request: ChatRequest) -> ChatResponse:
     if is_new:
         title = request.message[:20] + ("..." if len(request.message) > 20 else "")
         db.collection("conversations").document(conv_id).update({"title": title})
+    else:
+        title = detail.title
 
-    return ChatResponse(conversation_id=conv_id, answer=answer)
+    return ChatResponse(conversation_id=conv_id, answer=answer, title=title)

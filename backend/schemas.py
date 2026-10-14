@@ -125,3 +125,4 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     conversation_id: str
     answer: str
+    title: str  # 새 대화면 자동 생성된 제목, 기존 대화면 현재 제목
